@@ -26,6 +26,7 @@ export type ProjectSummary = {
   quotation_total: number | null
   cost_total: number | null
   total_received: number | null
+  unpaid_amount?: number | null
   payment_progress: number | null
 }
 

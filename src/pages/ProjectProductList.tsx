@@ -45,6 +45,7 @@ type ProjectSummary = {
   quotation_total: number
   cost_total: number
   total_received: number
+  unpaid_amount?: number | null
   payment_progress: number | null
 }
 
@@ -697,6 +698,28 @@ const ProjectProductListPage: React.FC = () => {
               />
             </Card>
           </Col>
+          {canViewQuotation ? (
+            <Col xs={24} sm={12} md={8}>
+              <Card
+                size="small"
+                style={{
+                  borderLeft: '4px solid #d48806',
+                  background: 'linear-gradient(135deg, #fffbe6 0%, #fff 100%)',
+                }}
+              >
+                <Statistic
+                  title={<span>未回款金额（元）</span>}
+                  value={formatMoney(summary?.unpaid_amount ?? null)}
+                  valueStyle={{
+                    color:
+                      summary?.unpaid_amount != null && summary.unpaid_amount > 0 ? '#d48806' : '#8c8c8c',
+                    fontWeight: 600,
+                    fontSize: 20,
+                  }}
+                />
+              </Card>
+            </Col>
+          ) : null}
           {canViewQuotation && canViewCost ? (
             <Col xs={24} sm={12} md={8}>
               <Card

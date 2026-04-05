@@ -42,6 +42,8 @@ export type ProjectSummary = {
   quotation_total: number | null
   cost_total: number | null
   total_received: number | null
+  /** 含税报价 − 已回款（≥0）；无报价权限时为 null */
+  unpaid_amount: number | null
   payment_progress: number | null
   /** 项目创建时间（用于按日期范围筛选） */
   created_at?: string | null
@@ -318,13 +320,26 @@ const ProjectsPage: React.FC = () => {
     let quotation = 0
     let cost = 0
     let received = 0
+    let unpaid = 0
     for (const row of filteredList) {
       if (row.quotation_total != null && Number.isFinite(row.quotation_total)) quotation += row.quotation_total
       if (row.cost_total != null && Number.isFinite(row.cost_total)) cost += row.cost_total
       if (row.total_received != null && Number.isFinite(row.total_received)) received += row.total_received
+      if (row.unpaid_amount != null && Number.isFinite(row.unpaid_amount)) unpaid += row.unpaid_amount
     }
-    return { quotation, cost, received }
+    return { quotation, cost, received, unpaid }
   }, [filteredList])
+
+  const receivableMoneyOverview = React.useMemo(() => {
+    if (!receivableDrawer) return null
+    const cap = receivableDrawer.quotation_total
+    const sum = receivableList.reduce((s, r) => s + (Number(r.amount) || 0), 0)
+    if (cap != null && Number.isFinite(cap)) {
+      const raw = Math.round((cap - sum) * 100) / 100
+      return { quotation: cap, received: sum, unpaid: raw > 0 ? raw : 0 }
+    }
+    return { quotation: null as number | null, received: sum, unpaid: null as number | null }
+  }, [receivableDrawer, receivableList])
 
   const columns: ColumnsType<ProjectSummary> = useMemo(() => {
     const cols: ColumnsType<ProjectSummary> = [
@@ -463,6 +478,16 @@ const ProjectsPage: React.FC = () => {
     })
     if (canViewQuotation) {
       cols.push(
+        {
+          title: '未回款(元)',
+          dataIndex: 'unpaid_amount',
+          key: 'unpaid_amount',
+          width: 120,
+          align: 'right',
+          render: (v: number | null) => (
+            <Text type={v != null && v > 0 ? 'warning' : 'secondary'}>{formatMoney(v)}</Text>
+          ),
+        },
         {
           title: '回款进度',
           dataIndex: 'payment_progress',
@@ -736,6 +761,13 @@ const ProjectsPage: React.FC = () => {
               </Table.Summary.Cell>,
             )
             if (canViewQuotation) {
+              cells.push(
+                <Table.Summary.Cell key="un" index={next()} align="right">
+                  <Text strong>{formatMoney(listTotals.unpaid)}</Text>
+                </Table.Summary.Cell>,
+              )
+            }
+            if (canViewQuotation) {
               cells.push(<Table.Summary.Cell key="pg" index={next()} />)
               cells.push(<Table.Summary.Cell key="hi" index={next()} />)
             }
@@ -763,6 +795,29 @@ const ProjectsPage: React.FC = () => {
               <Text type="secondary" style={{ fontSize: 13 }}>
                 当前账号无报价清单权限，无法校验「回款总额是否超过报价」；录入金额请自行与业务核对。
               </Text>
+            ) : null}
+            {receivableMoneyOverview && (receivableMoneyOverview.quotation != null || receivableMoneyOverview.received > 0) ? (
+              <Card size="small" title="金额概览（随列表实时更新）">
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  {receivableMoneyOverview.quotation != null ? (
+                    <Text>
+                      含税报价合计：<Text strong>{formatMoney(receivableMoneyOverview.quotation)}</Text> 元
+                    </Text>
+                  ) : null}
+                  <Text>
+                    已回款合计：<Text strong>{formatMoney(receivableMoneyOverview.received)}</Text> 元
+                  </Text>
+                  {receivableMoneyOverview.unpaid != null ? (
+                    <Text>
+                      未回款金额：
+                      <Text strong type={receivableMoneyOverview.unpaid > 0 ? 'warning' : 'secondary'}>
+                        {formatMoney(receivableMoneyOverview.unpaid)}
+                      </Text>{' '}
+                      元
+                    </Text>
+                  ) : null}
+                </Space>
+              </Card>
             ) : null}
             <Card size="small" className="drawer-card-form" title={editingRecord ? '编辑回款记录' : '新增回款记录'}>
               <Form
