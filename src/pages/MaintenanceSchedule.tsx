@@ -212,6 +212,76 @@ function formatLogLine(log: MaintenanceTaskLog): string {
   return `${act}${who}`
 }
 
+/** 操作记录附图：鉴权拉取预览 blob 作缩略图，点击缩略图或「预览」打开大图 Modal */
+const LogAttachmentRow: React.FC<{
+  taskId: number
+  logId: number
+  att: MaintenanceTaskLogAttachment
+  onOpenPreview: (logId: number, att: MaintenanceTaskLogAttachment) => void
+  onDownload: (logId: number, att: MaintenanceTaskLogAttachment) => void
+}> = ({ taskId, logId, att, onOpenPreview, onDownload }) => {
+  const urlRef = useRef<string | null>(null)
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void axios
+      .get(`/api/maintenance-tasks/${taskId}/logs/${logId}/attachments/${att.id}/preview`, { responseType: 'blob' })
+      .then((res) => {
+        if (cancelled) return
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+        const u = URL.createObjectURL(res.data)
+        urlRef.current = u
+        setThumbUrl(u)
+      })
+      .catch(() => {
+        if (!cancelled) setThumbUrl(null)
+      })
+    return () => {
+      cancelled = true
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [taskId, logId, att.id])
+  return (
+    <Space align="start" size={10} style={{ maxWidth: 360 }}>
+      <button
+        type="button"
+        onClick={() => void onOpenPreview(logId, att)}
+        title="大图预览"
+        style={{
+          border: '1px solid var(--ant-colorBorder)',
+          borderRadius: 6,
+          padding: 0,
+          cursor: 'pointer',
+          background: 'var(--ant-colorFillAlter)',
+          flexShrink: 0,
+        }}
+      >
+        {thumbUrl ? (
+          <img src={thumbUrl} alt="" style={{ width: 72, height: 72, objectFit: 'cover', display: 'block' }} />
+        ) : (
+          <div style={{ width: 72, height: 72, background: 'var(--ant-colorFillSecondary)' }} />
+        )}
+      </button>
+      <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+        <Text ellipsis style={{ fontSize: 12, maxWidth: 240 }} title={att.file_name}>
+          {att.file_name}
+        </Text>
+        <Space size={4}>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => void onOpenPreview(logId, att)}>
+            预览
+          </Button>
+          <Button type="link" size="small" icon={<DownloadOutlined />} onClick={() => void onDownload(logId, att)}>
+            下载
+          </Button>
+        </Space>
+      </Space>
+    </Space>
+  )
+}
+
 function defaultDueAtHour18(): Dayjs {
   const now = dayjs()
   let d = now.startOf('day').hour(18).minute(0).second(0).millisecond(0)
@@ -1015,27 +1085,17 @@ const MaintenanceSchedulePage: React.FC = () => {
                           {log.progress_after != null ? ` · 进度 ${log.progress_after}%` : ''}
                         </Text>
                         <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{log.content}</div>
-                        {atts.length > 0 ? (
-                          <Space size="small" wrap style={{ marginTop: 8 }}>
+                        {atts.length > 0 && detailId != null ? (
+                          <Space wrap size={[12, 12]} style={{ marginTop: 8 }}>
                             {atts.map((att) => (
-                              <Space key={att.id} size={4}>
-                                <Button
-                                  type="link"
-                                  size="small"
-                                  icon={<EyeOutlined />}
-                                  onClick={() => void openLogAttachmentPreview(log.id, att)}
-                                >
-                                  {att.file_name}
-                                </Button>
-                                <Button
-                                  type="link"
-                                  size="small"
-                                  icon={<DownloadOutlined />}
-                                  onClick={() => void downloadLogAttachment(log.id, att)}
-                                >
-                                  下载
-                                </Button>
-                              </Space>
+                              <LogAttachmentRow
+                                key={att.id}
+                                taskId={detailId}
+                                logId={log.id}
+                                att={att}
+                                onOpenPreview={openLogAttachmentPreview}
+                                onDownload={downloadLogAttachment}
+                              />
                             ))}
                           </Space>
                         ) : null}

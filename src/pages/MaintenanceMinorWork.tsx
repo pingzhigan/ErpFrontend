@@ -177,6 +177,17 @@ type MinorWorkTrack = {
   created_by: string | null
 }
 
+type MinorWorkTrackAttachmentDto = {
+  id: number
+  minor_work_id: number
+  track_id: number
+  file_name: string
+  file_size: number
+  mime_type: string | null
+  created_at: string
+  created_by: string | null
+}
+
 const TRACK_KIND_LABEL: Record<string, string> = {
   track: '跟踪',
   assign: '分配任务',
@@ -255,6 +266,78 @@ function dueAtDisabledTime(date: Dayjs | null | undefined) {
   return { disabledHours: () => disabledHours }
 }
 
+/** 跟踪记录附图：缩略图 + 预览/下载 */
+const MinorTrackAttachmentRow: React.FC<{
+  orderId: number
+  att: MinorWorkTrackAttachmentDto
+  onOpenPreview: (att: MinorWorkTrackAttachmentDto) => void
+  onDownload: (att: MinorWorkTrackAttachmentDto) => void
+}> = ({ orderId, att, onOpenPreview, onDownload }) => {
+  const urlRef = useRef<string | null>(null)
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void axios
+      .get(
+        `/api/minor-works/${orderId}/tracks/${att.track_id}/attachments/${att.id}/preview`,
+        { responseType: 'blob' },
+      )
+      .then((res) => {
+        if (cancelled) return
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+        const u = URL.createObjectURL(res.data)
+        urlRef.current = u
+        setThumbUrl(u)
+      })
+      .catch(() => {
+        if (!cancelled) setThumbUrl(null)
+      })
+    return () => {
+      cancelled = true
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [orderId, att.track_id, att.id])
+  return (
+    <Space align="start" size={10} style={{ maxWidth: 360 }}>
+      <button
+        type="button"
+        onClick={() => void onOpenPreview(att)}
+        title="大图预览"
+        style={{
+          border: '1px solid var(--ant-colorBorder)',
+          borderRadius: 6,
+          padding: 0,
+          cursor: 'pointer',
+          background: 'var(--ant-colorFillAlter)',
+          flexShrink: 0,
+        }}
+      >
+        {thumbUrl ? (
+          <img src={thumbUrl} alt="" style={{ width: 72, height: 72, objectFit: 'cover', display: 'block' }} />
+        ) : (
+          <div style={{ width: 72, height: 72, background: 'var(--ant-colorFillSecondary)' }} />
+        )}
+      </button>
+      <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+        <Text ellipsis style={{ fontSize: 12, maxWidth: 240 }} title={att.file_name}>
+          {att.file_name}
+        </Text>
+        <Space size={4}>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => void onOpenPreview(att)}>
+            预览
+          </Button>
+          <Button type="link" size="small" icon={<DownloadOutlined />} onClick={() => void onDownload(att)}>
+            下载
+          </Button>
+        </Space>
+      </Space>
+    </Space>
+  )
+}
+
 const MaintenanceMinorWorkPage: React.FC = () => {
   const { message: msg } = App.useApp()
   const [list, setList] = useState<MinorWorkOrder[]>([])
@@ -270,6 +353,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   const [order, setOrder] = useState<MinorWorkOrder | null>(null)
   const [tracks, setTracks] = useState<MinorWorkTrack[]>([])
   const [dispatchAttachments, setDispatchAttachments] = useState<DispatchAttachmentDto[]>([])
+  const [trackAttachments, setTrackAttachments] = useState<MinorWorkTrackAttachmentDto[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
   const [dispatchForm] = Form.useForm()
   const [assignHandlerForm] = Form.useForm()
@@ -367,11 +451,13 @@ const MaintenanceMinorWorkPage: React.FC = () => {
           order: MinorWorkOrder
           tracks: MinorWorkTrack[]
           dispatchAttachments?: DispatchAttachmentDto[]
+          trackAttachments?: MinorWorkTrackAttachmentDto[]
           audit?: GateAudit
         }>(`/api/minor-works/${id}`)
         setOrder({ ...res.data.order, audit: res.data.audit })
         setTracks(res.data.tracks ?? [])
         setDispatchAttachments(res.data.dispatchAttachments ?? [])
+        setTrackAttachments(res.data.trackAttachments ?? [])
         const o = res.data.order
         const planDefault = parseMinorPlanDateDefault(o.plan_date, o.due_at)
         assignHandlerForm.setFieldsValue({
@@ -392,6 +478,18 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     },
     [assignHandlerForm, dispatchForm, msg, trackForm],
   )
+
+  const trackAttachmentsByTrackId = useMemo(() => {
+    const m: Record<number, MinorWorkTrackAttachmentDto[]> = {}
+    for (const a of trackAttachments) {
+      if (!m[a.track_id]) m[a.track_id] = []
+      m[a.track_id].push(a)
+    }
+    for (const k of Object.keys(m)) {
+      m[Number(k)].sort((x, y) => x.id - y.id)
+    }
+    return m
+  }, [trackAttachments])
 
   useEffect(() => {
     if (drawerOpen && detailId != null) {
@@ -496,6 +594,12 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       setOrder({ ...no, audit: no.audit })
       setTracks(res.data.tracks)
       trackForm.resetFields()
+      try {
+        const d = await axios.get<{ trackAttachments?: MinorWorkTrackAttachmentDto[] }>(`/api/minor-works/${detailId}`)
+        setTrackAttachments(d.data.trackAttachments ?? [])
+      } catch {
+        /* 忽略附图列表刷新失败 */
+      }
       msg.success('已保存跟踪记录')
       fetchList()
     } catch (e: unknown) {
@@ -572,6 +676,50 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         setPreviewOpen(true)
       } catch (e: unknown) {
         msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '预览失败')
+      }
+    },
+    [detailId, msg],
+  )
+
+  const openTrackAttachmentPreview = useCallback(
+    async (att: MinorWorkTrackAttachmentDto) => {
+      if (!detailId) return
+      try {
+        const res = await axios.get(
+          `/api/minor-works/${detailId}/tracks/${att.track_id}/attachments/${att.id}/preview`,
+          { responseType: 'blob' },
+        )
+        const url = URL.createObjectURL(res.data)
+        setPreviewBlob((old) => {
+          if (old?.url) URL.revokeObjectURL(old.url)
+          return { url, name: att.file_name }
+        })
+        setPreviewOpen(true)
+      } catch (e: unknown) {
+        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '预览失败')
+      }
+    },
+    [detailId, msg],
+  )
+
+  const downloadTrackAttachment = useCallback(
+    async (att: MinorWorkTrackAttachmentDto) => {
+      if (!detailId) return
+      try {
+        const res = await axios.get(
+          `/api/minor-works/${detailId}/tracks/${att.track_id}/attachments/${att.id}/file`,
+          { responseType: 'blob' },
+        )
+        const url = URL.createObjectURL(res.data)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = att.file_name
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        URL.revokeObjectURL(url)
+      } catch (e: unknown) {
+        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '下载失败')
       }
     },
     [detailId, msg],
@@ -1224,6 +1372,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                       const lineColor =
                         tk === 'assign' ? 'green' : tk === 'reassign' ? 'cyan' : 'blue'
                       const kindLabel = TRACK_KIND_LABEL[tk] ?? '跟踪'
+                      const tAtts = trackAttachmentsByTrackId[t.id] ?? []
                       return (
                         <Timeline.Item key={t.id} color={lineColor}>
                           <Text type="secondary" style={{ fontSize: 12 }}>
@@ -1232,6 +1381,19 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                             {t.progress_after != null ? ` · 进度 ${t.progress_after}%` : ''}
                           </Text>
                           <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{t.content}</div>
+                          {tAtts.length > 0 && detailId != null ? (
+                            <Space wrap size={[12, 12]} style={{ marginTop: 8 }}>
+                              {tAtts.map((att) => (
+                                <MinorTrackAttachmentRow
+                                  key={att.id}
+                                  orderId={detailId}
+                                  att={att}
+                                  onOpenPreview={openTrackAttachmentPreview}
+                                  onDownload={downloadTrackAttachment}
+                                />
+                              ))}
+                            </Space>
+                          ) : null}
                         </Timeline.Item>
                       )
                     })}
