@@ -1,0 +1,123 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 400px;
+  overflow-y: auto;
+}
+
+.header {
+  flex-shrink: 0;
+  margin-bottom: 16px;
+}
+
+.desc {
+  font-size: 13px;
+  display: block;
+}
+
+.uploadCard {
+  margin-bottom: 12px;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+.uploadCard :global(.ant-card-body) {
+  padding: 0;
+}
+
+.uploadZone {
+  padding: 16px 20px;
+  border: 2px dashed #d9d9d9;
+  border-radius: 8px;
+  background: #fafafa;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.uploadZone:hover {
+  border-color: #52c41a;
+  background: #f6ffed;
+}
+
+.uploadZoneDragOver {
+  border-color: #52c41a;
+  background: #d9f7be;
+}
+
+.uploadZoneLoading {
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.uploadZoneIcon {
+  font-size: 32px;
+  color: #bfbfbf;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.uploadZone:hover .uploadZoneIcon,
+.uploadZoneDragOver .uploadZoneIcon {
+  color: #52c41a;
+}
+
+.uploadZoneText {
+  font-size: 13px;
+  color: #262626;
+  margin-bottom: 4px;
+}
+
+.uploadZoneHint {
+  font-size: 12px;
+  display: block;
+}
+
+.streamingPreview {
+  margin: 8px 0 0;
+  padding: 8px;
+  max-height: 80px;
+  overflow: auto;
+  font-size: 12px;
+  text-align: left;
+  background: #f5f5f5;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.listCard {
+  margin-top: 0;
+  border-radius: 12px;
+}
+
+.listCard :global(.ant-card-body) {
+  padding: 16px;
+}
+
+.listToolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.tableScrollWrap {
+  overflow-x: auto;
+}
+
+.listFooter {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.editableTable :global(.ant-table) {
+  font-size: 13px;
+}

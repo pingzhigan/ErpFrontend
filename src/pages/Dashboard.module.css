@@ -1,0 +1,201 @@
+/* 仪表盘整体与欢迎区 */
+.wrap {
+  --stat-project: #1677ff;
+  --stat-opportunity: #722ed1;
+  --stat-config: #13c2c2;
+  --stat-product: #00b96b;
+  --stat-cost: #fa8c16;
+  --stat-inventory: #eb2f96;
+  --stat-log: #faad14;
+  --link-project: #722ed1;
+  --link-opportunity: #531dab;
+  --link-config: #08979c;
+  --link-cost: #d46b08;
+  --link-product: #00b96b;
+  --link-inventory: #eb2f96;
+  --link-doc: #1677ff;
+  --link-ai: #13c2c2;
+  --link-rule: #2f54eb;
+  --link-knowledge: #389e0d;
+  --link-log: #fa8c16;
+}
+
+.welcomeBanner {
+  background: linear-gradient(135deg, #e6f4ff 0%, #f0f5ff 50%, #f9f0ff 100%);
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+  border: 1px solid rgba(22, 119, 255, 0.08);
+}
+
+.welcomeTitle {
+  margin-bottom: 4px !important;
+  background: linear-gradient(135deg, #1677ff 0%, #597ef7 50%, #722ed1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 600 !important;
+}
+
+.welcomeDesc {
+  color: #595959;
+  font-size: 14px;
+}
+
+/* 统计卡片：左侧色条 + 浅色背景 */
+.statCard {
+  border-radius: 12px;
+  overflow: hidden;
+  border: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.statCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+}
+
+.statCardProjects {
+  border-left: 4px solid var(--stat-project);
+  background: linear-gradient(135deg, #e6f4ff 0%, #f0f9ff 100%);
+}
+
+.statCardOpportunities {
+  border-left: 4px solid var(--stat-opportunity);
+  background: linear-gradient(135deg, #f9f0ff 0%, #efdbff 100%);
+}
+
+.statCardConfig {
+  border-left: 4px solid var(--stat-config);
+  background: linear-gradient(135deg, #e6fffb 0%, #b5f5ec 100%);
+}
+
+.statCardProducts {
+  border-left: 4px solid var(--stat-product);
+  background: linear-gradient(135deg, #e6fffb 0%, #f0fff4 100%);
+}
+
+.statCardCost {
+  border-left: 4px solid var(--stat-cost);
+  background: linear-gradient(135deg, #fff7e6 0%, #fff1e6 100%);
+}
+
+.statCardInventory {
+  border-left: 4px solid var(--stat-inventory);
+  background: linear-gradient(135deg, #fff0f6 0%, #ffe7f0 100%);
+}
+
+.statCardLogs {
+  border-left: 4px solid var(--stat-log);
+  background: linear-gradient(135deg, #fffbe6 0%, #fff7e6 100%);
+}
+
+/* 经营概览卡片 */
+.overviewCard {
+  border-radius: 12px;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.sectionTitle {
+  margin-bottom: 12px !important;
+  color: #262626;
+  font-weight: 600 !important;
+}
+
+/* 快捷入口卡片：图标底色 + 悬停 */
+.quickLinkCard {
+  border-radius: 12px;
+  border: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.quickLinkCard:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+.quickLinkCard_project:hover { border-color: var(--link-project); box-shadow: 0 8px 24px rgba(114, 46, 209, 0.2); }
+.quickLinkCard_opportunity:hover { border-color: var(--link-opportunity); box-shadow: 0 8px 24px rgba(83, 29, 171, 0.2); }
+.quickLinkCard_config:hover { border-color: var(--link-config); box-shadow: 0 8px 24px rgba(8, 151, 156, 0.2); }
+.quickLinkCard_cost:hover { border-color: var(--link-cost); box-shadow: 0 8px 24px rgba(212, 107, 8, 0.2); }
+.quickLinkCard_product:hover { border-color: var(--link-product); box-shadow: 0 8px 24px rgba(0, 185, 107, 0.2); }
+.quickLinkCard_inventory:hover { border-color: var(--link-inventory); box-shadow: 0 8px 24px rgba(235, 47, 150, 0.2); }
+.quickLinkCard_doc:hover { border-color: var(--link-doc); box-shadow: 0 8px 24px rgba(22, 119, 255, 0.2); }
+.quickLinkCard_ai:hover { border-color: var(--link-ai); box-shadow: 0 8px 24px rgba(19, 194, 194, 0.2); }
+.quickLinkCard_rule:hover { border-color: var(--link-rule); box-shadow: 0 8px 24px rgba(47, 84, 235, 0.2); }
+.quickLinkCard_knowledge:hover { border-color: var(--link-knowledge); box-shadow: 0 8px 24px rgba(56, 158, 13, 0.2); }
+.quickLinkCard_log:hover { border-color: var(--link-log); box-shadow: 0 8px 24px rgba(250, 140, 22, 0.2); }
+
+.iconWrap {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.iconWrap_project { background: linear-gradient(135deg, #efdbff, #d3adf7); color: #722ed1; }
+.iconWrap_opportunity { background: linear-gradient(135deg, #d3adf7, #b37feb); color: #531dab; }
+.iconWrap_config { background: linear-gradient(135deg, #b5f5ec, #87e8de); color: #08979c; }
+.iconWrap_cost { background: linear-gradient(135deg, #ffe7ba, #ffd591); color: #d46b08; }
+.iconWrap_product { background: linear-gradient(135deg, #b5f5ec, #87e8de); color: #08979c; }
+.iconWrap_inventory { background: linear-gradient(135deg, #ffd6e7, #ffadd2); color: #eb2f96; }
+.iconWrap_doc { background: linear-gradient(135deg, #bae0ff, #91caff); color: #1677ff; }
+.iconWrap_ai { background: linear-gradient(135deg, #b5f5ec, #5cdbd3); color: #13c2c2; }
+.iconWrap_rule { background: linear-gradient(135deg, #adc6ff, #85a5ff); color: #2f54eb; }
+.iconWrap_knowledge { background: linear-gradient(135deg, #d9f7be, #b7eb8f); color: #389e0d; }
+.iconWrap_log { background: linear-gradient(135deg, #ffe7ba, #ffd591); color: #d46b08; }
+
+.quickLinkLabel {
+  font-weight: 600;
+  color: #262626;
+}
+
+.quickLinkDesc {
+  font-size: 12px;
+  color: #8c8c8c;
+  margin-top: 2px;
+}
+
+/* 最近操作区域 */
+.recentCard {
+  border-radius: 12px;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.recentList {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.recentItem {
+  margin-bottom: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #fafafa;
+}
+
+.recentItem:last-child {
+  border-bottom: none;
+}
+
+.recentTime { color: #8c8c8c; font-size: 13px; }
+.recentUser { color: #262626; font-weight: 500; }
+.recentAction { color: #1677ff; }
+
+.viewAllLink {
+  font-size: 13px;
+  margin-top: 12px;
+  display: inline-block;
+}
+
+.viewAllLink:hover {
+  color: #4096ff !important;
+}

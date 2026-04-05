@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- XSS 防护：限制脚本与资源来源 -->
+    <!-- script-src 含 https://g.alicdn.com：钉钉 H5 JSAPI（dingtalk.open.js） -->
+    <!-- connect-src 含 localhost:4000 以便 Electron / 本地开发；部署到公网且钉钉内访问时，请改为实际 API 源（或同源反代），否则接口会被 CSP 拦截 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://g.alicdn.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; frame-src 'self' blob:; font-src 'self'; connect-src 'self' http://localhost:4000 http://127.0.0.1:4000; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <title>frontend</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

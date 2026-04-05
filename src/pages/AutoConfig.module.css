@@ -1,0 +1,287 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 400px;
+  overflow-y: auto;
+}
+
+.header {
+  flex-shrink: 0;
+  margin-bottom: 16px;
+}
+
+.title {
+  margin-bottom: 4px !important;
+}
+
+.desc {
+  font-size: 13px;
+  display: block;
+}
+
+.chatCard {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.chatCard :global(.ant-card-body) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px;
+}
+
+.messageList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0 16px;
+  margin-bottom: 12px;
+}
+
+.placeholder {
+  padding: 24px 16px;
+  color: #8c8c8c;
+  font-size: 13px;
+}
+
+.placeholder ul {
+  margin: 12px 0 0 20px;
+  padding: 0;
+}
+
+.placeholder li {
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.messageUser,
+.messageAssistant {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  align-items: flex-start;
+}
+
+.messageUser {
+  flex-direction: row-reverse;
+}
+
+.avatar {
+  flex-shrink: 0;
+}
+
+.bubble {
+  max-width: 75%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  line-height: 1.6;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.messageUser .bubble {
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.messageAssistant .bubble {
+  background: #f5f5f5;
+  color: #262626;
+  border: 1px solid #f0f0f0;
+  border-bottom-left-radius: 4px;
+}
+
+.content {
+  white-space: pre-wrap;
+}
+
+.assistantBlock {
+  width: 100%;
+  max-width: 100%;
+}
+
+.assistantDesc {
+  margin-bottom: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.listHint {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.uploadCard {
+  margin-bottom: 12px;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+.uploadCard :global(.ant-card-body) {
+  padding: 0;
+}
+
+.uploadZone {
+  padding: 16px 20px;
+  border: 2px dashed #d9d9d9;
+  border-radius: 8px;
+  background: #fafafa;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.uploadZone:hover {
+  border-color: #1677ff;
+  background: #f0f7ff;
+}
+
+.uploadZoneDragOver {
+  border-color: #1677ff;
+  background: #e6f4ff;
+}
+
+.uploadZoneLoading {
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.uploadZoneIcon {
+  font-size: 32px;
+  color: #bfbfbf;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.uploadZone:hover .uploadZoneIcon,
+.uploadZoneDragOver .uploadZoneIcon {
+  color: #1677ff;
+}
+
+.uploadZoneText {
+  font-size: 13px;
+  color: #262626;
+  margin-bottom: 4px;
+}
+
+.uploadZoneHint {
+  font-size: 12px;
+  display: block;
+}
+
+.streamingPreview {
+  margin: 8px 0 0;
+  padding: 8px;
+  max-height: 80px;
+  overflow: auto;
+  font-size: 12px;
+  text-align: left;
+  background: #f5f5f5;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.listCard {
+  margin-top: 0;
+  border-radius: 12px;
+}
+
+.listCard :global(.ant-card-body) {
+  padding: 16px;
+}
+
+.listToolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.tableScrollWrap {
+  overflow-x: auto;
+}
+
+.listFooter {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.editableTable :global(.ant-table) {
+  font-size: 13px;
+}
+
+.tableInput {
+  width: 100%;
+  min-width: 60px;
+}
+
+.tableTextArea {
+  width: 100%;
+  min-width: 120px;
+  resize: vertical;
+}
+.tableTextArea :global(.ant-input) {
+  resize: vertical;
+  min-height: 40px;
+}
+
+.typing {
+  color: #8c8c8c;
+  font-style: italic;
+}
+
+.inputRow {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.textArea {
+  flex: 1;
+  resize: none;
+}
+
+.textArea:global(.ant-input) {
+  border-radius: 10px;
+}
+
+.sendBtn {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: none;
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  transition: opacity 0.2s, transform 0.15s;
+}
+
+.sendBtn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: scale(1.02);
+}
+
+.sendBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
