@@ -1,17 +1,13 @@
 /**
  * 功能名称：项目分析
- * 实现原理与逻辑：展示项目列表及每个项目的基本信息与缺漏项检测（报价表、成本表、回款情况、附件情况）。
- * 缺漏项仅作为提示，不影响项目正常使用。
+ * 实现原理与逻辑：报价表/成本表缺漏标红；回款在已有报价前提下：未回款、款未回完（回款小于报价）、不一致（回款大于报价）标黄，已对齐标绿；附件缺漏标蓝。
+ * 工作台消息与下表一致：未回款、款未回完、不一致均会提醒；不推送附件缺漏。
  */
 import {
   BarChartOutlined,
   CheckCircleOutlined,
   ExclamationCircleOutlined,
-  FileTextOutlined,
   FolderOutlined,
-  PaperClipOutlined,
-  ShoppingOutlined,
-  WalletOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { Alert, App, Card, Progress, Space, Table, Tag, Tooltip, Typography } from 'antd'
@@ -41,6 +37,13 @@ const formatMoney = (v: number | null | undefined) =>
   v != null && Number.isFinite(v)
     ? Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '—'
+
+const moneyRoughlyEqual = (a: number | null | undefined, b: number | null | undefined) => {
+  const x = Number(a)
+  const y = Number(b)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false
+  return Math.abs(x - y) < 0.01
+}
 
 const ProjectAnalysisPage: React.FC = () => {
   const { message: msg } = App.useApp()
@@ -98,13 +101,42 @@ const ProjectAnalysisPage: React.FC = () => {
     row.total_received != null && Number(row.total_received) > 0
   const hasAttachments = (row: ProjectAnalysisRow) => row.attachment_count > 0
 
-  const missingItems = (row: ProjectAnalysisRow): string[] => {
-    const items: string[] = []
-    if (canViewQuotation && !hasQuotation(row)) items.push('报价表')
-    if (canViewCost && !hasCost(row)) items.push('成本表')
-    if (!hasReceivables(row)) items.push('回款情况')
-    if (!hasAttachments(row)) items.push('附件')
-    return items
+  /** 已有报价前提下，回款与含税报价合计（0.01 元容差） */
+  const receivableVsQuotation = (row: ProjectAnalysisRow): 'not_paid' | 'aligned' | 'underpaid' | 'overpaid' => {
+    const q = Number(row.quotation_total) || 0
+    const r = Number(row.total_received) || 0
+    if (!hasReceivables(row)) return 'not_paid'
+    if (moneyRoughlyEqual(q, r)) return 'aligned'
+    if (r < q) return 'underpaid'
+    return 'overpaid'
+  }
+
+  /** 缺漏汇总：红=报价/成本，黄=未回款/款未回完/不一致，蓝=附件（附件不进消息中心） */
+  const missingTags = (
+    row: ProjectAnalysisRow,
+  ): { label: string; color: string; title?: string }[] => {
+    const tags: { label: string; color: string; title?: string }[] = []
+    if (canViewQuotation && !hasQuotation(row)) {
+      tags.push({ label: '报价表', color: 'error', title: '缺少报价表（商品/报价合计）' })
+    }
+    if (canViewCost && !hasCost(row)) {
+      tags.push({ label: '成本表', color: 'error', title: '缺少成本表数据' })
+    }
+    if (canViewQuotation && hasQuotation(row)) {
+      const amtTitle = `含税报价 ${formatMoney(row.quotation_total)} 元，已回款 ${formatMoney(row.total_received)} 元`
+      const v = receivableVsQuotation(row)
+      if (v === 'not_paid') {
+        tags.push({ label: '未回款', color: 'warning', title: amtTitle })
+      } else if (v === 'underpaid') {
+        tags.push({ label: '款未回完', color: 'warning', title: amtTitle })
+      } else if (v === 'overpaid') {
+        tags.push({ label: '不一致', color: 'warning', title: amtTitle })
+      }
+    }
+    if (!hasAttachments(row)) {
+      tags.push({ label: '附件', color: 'blue', title: '暂无合同/图纸等附件' })
+    }
+    return tags
   }
 
   const columns: ColumnsType<ProjectAnalysisRow> = [
@@ -177,7 +209,7 @@ const ProjectAnalysisPage: React.FC = () => {
           </Tag>
         ) : (
           <Tooltip title="该项目暂无报价数据，可在项目维护或报价清单中补充">
-            <Tag color="warning" icon={<ExclamationCircleOutlined />}>
+            <Tag color="error" icon={<ExclamationCircleOutlined />}>
               缺漏
             </Tag>
           </Tooltip>
@@ -195,7 +227,7 @@ const ProjectAnalysisPage: React.FC = () => {
           </Tag>
         ) : (
           <Tooltip title="该项目暂无成本数据，可在成本清单中按项目维护">
-            <Tag color="warning" icon={<ExclamationCircleOutlined />}>
+            <Tag color="error" icon={<ExclamationCircleOutlined />}>
               缺漏
             </Tag>
           </Tooltip>
@@ -204,20 +236,51 @@ const ProjectAnalysisPage: React.FC = () => {
     {
       title: '回款情况',
       key: 'check_receivables',
-      width: 96,
+      width: 108,
       align: 'center',
-      render: (_: unknown, row: ProjectAnalysisRow) =>
-        hasReceivables(row) ? (
+      render: (_: unknown, row: ProjectAnalysisRow) => {
+        if (!hasQuotation(row)) {
+          return (
+            <Tooltip title="尚无报价数据，无法核对回款与报价是否一致">
+              <Tag>待核对</Tag>
+            </Tooltip>
+          )
+        }
+        const amtTip = `含税报价 ${formatMoney(row.quotation_total)} 元，已回款 ${formatMoney(row.total_received)} 元`
+        const v = receivableVsQuotation(row)
+        if (v === 'not_paid') {
+          return (
+            <Tooltip title={amtTip}>
+              <Tag color="warning" icon={<ExclamationCircleOutlined />}>
+                未回款
+              </Tag>
+            </Tooltip>
+          )
+        }
+        if (v === 'underpaid') {
+          return (
+            <Tooltip title={amtTip}>
+              <Tag color="warning" icon={<ExclamationCircleOutlined />}>
+                款未回完
+              </Tag>
+            </Tooltip>
+          )
+        }
+        if (v === 'overpaid') {
+          return (
+            <Tooltip title={amtTip}>
+              <Tag color="warning" icon={<ExclamationCircleOutlined />}>
+                不一致
+              </Tag>
+            </Tooltip>
+          )
+        }
+        return (
           <Tag color="success" icon={<CheckCircleOutlined />}>
-            有
+            已对齐
           </Tag>
-        ) : (
-          <Tooltip title="该项目暂无回款记录，可在项目列表中点击「回款记录」添加">
-            <Tag color="warning" icon={<ExclamationCircleOutlined />}>
-              缺漏
-            </Tag>
-          </Tooltip>
-        ),
+        )
+      },
     },
     {
       title: '附件',
@@ -230,8 +293,8 @@ const ProjectAnalysisPage: React.FC = () => {
             有 ({row.attachment_count})
           </Tag>
         ) : (
-          <Tooltip title="该项目暂无附件，可在项目详情中上传合同、图纸等">
-            <Tag color="warning" icon={<ExclamationCircleOutlined />}>
+          <Tooltip title="该项目暂无附件，可在项目详情中上传合同、图纸等（不参与消息中心提醒）">
+            <Tag color="blue" icon={<ExclamationCircleOutlined />}>
               缺漏
             </Tag>
           </Tooltip>
@@ -242,8 +305,8 @@ const ProjectAnalysisPage: React.FC = () => {
       key: 'missing_summary',
       width: 160,
       render: (_: unknown, row: ProjectAnalysisRow) => {
-        const missing = missingItems(row)
-        if (missing.length === 0) {
+        const tags = missingTags(row)
+        if (tags.length === 0) {
           return (
             <Tag color="success" icon={<CheckCircleOutlined />}>
               无缺漏
@@ -254,14 +317,19 @@ const ProjectAnalysisPage: React.FC = () => {
           <Tooltip
             title={
               <span>
-                <FileTextOutlined /> 报价表 &nbsp;
-                <ShoppingOutlined /> 成本表 &nbsp;
-                <WalletOutlined /> 回款 &nbsp;
-                <PaperClipOutlined /> 附件
+                <span style={{ color: '#cf1322' }}>红</span>：报价表/成本表 &nbsp;
+                <span style={{ color: '#d48806' }}>黄</span>：未回款/款未回完/不一致 &nbsp;
+                <span style={{ color: '#1677ff' }}>蓝</span>：附件
               </span>
             }
           >
-            <Text type="secondary">缺 {missing.join('、')}</Text>
+            <Space size={[4, 4]} wrap>
+              {tags.map((t) => (
+                <Tag key={t.label} color={t.color} title={t.title}>
+                  {t.label}
+                </Tag>
+              ))}
+            </Space>
           </Tooltip>
         )
       },
@@ -295,7 +363,7 @@ const ProjectAnalysisPage: React.FC = () => {
               项目分析
             </Title>
             <Text type="secondary" className="header-desc" style={{ display: 'block' }}>
-              分析各项目的基本信息与缺漏项（报价表、成本表、回款情况、附件）。缺漏项仅作提示，不影响项目正常使用。
+              报价表/成本表缺漏标红；回款列：未回款、款未回完（回款小于报价）、不一致（回款大于报价）标黄，已对齐标绿；附件缺漏标蓝（附件不参与消息中心提醒）。
             </Text>
           </div>
         </div>
@@ -305,7 +373,7 @@ const ProjectAnalysisPage: React.FC = () => {
         type="info"
         showIcon
         message="说明"
-        description="下表对每个项目检测：是否已有报价表（商品）、成本表、回款记录、附件。标记为「缺漏」仅表示该项尚未维护，您仍可正常使用该项目；可根据提示到对应模块补充。"
+        description="报价表、成本表缺漏为红色。回款列：无回款记录为「未回款」（黄）；有回款且小于含税报价合计为「款未回完」（黄）；大于为「不一致」（黄）；相等（0.01 元内）为「已对齐」（绿）。工作台消息对上述三种黄标情况均会提醒；附件缺漏不进消息。"
         style={{ marginBottom: 16 }}
       />
 
