@@ -1,6 +1,6 @@
 /**
  * 功能名称：机会管理列表
- * 实现原理与逻辑：展示销售机会列表（名称、客户、金额、阶段等），支持筛选与分页；可新增/编辑/删除机会。提供 AI 对话入口，
+ * 实现原理与逻辑：展示销售机会列表（名称、客户、金额、阶段等），支持按关键词查询（GET /api/opportunities?keyword=，与钉钉小程序一致）、表格分页；可新增/编辑/删除机会。提供 AI 对话入口，
  * 通过自然语言补充机会信息并自动创建或更新机会。阶段包括线索至赢单/输单，列表可区分进行中与已结束机会。
  */
 import {
@@ -156,14 +156,27 @@ const OpportunitiesPage: React.FC = () => {
   const [addChatLoading, setAddChatLoading] = useState(false)
   const addChatListRef = useRef<HTMLDivElement>(null)
   const [dingSubmittingId, setDingSubmittingId] = useState<number | null>(null)
+  /** 列表查询关键词（与小程序一致：名称、客户、阶段、备注，后端 keyword） */
+  const [keyword, setKeyword] = useState('')
+  const [listTotal, setListTotal] = useState(0)
 
-  const fetchList = async () => {
+  const fetchList = async (keywordArg?: string) => {
+    const kw = (keywordArg !== undefined ? keywordArg : keyword).trim()
     setLoading(true)
     try {
+      const params = new URLSearchParams()
+      if (kw) params.set('keyword', kw)
+      const qs = params.toString()
       const res = await axios.get<{ list: OpportunityItem[]; total: number }>(
-        '/api/opportunities'
+        `/api/opportunities${qs ? `?${qs}` : ''}`
       )
       setList(res.data.list || [])
+      setListTotal(
+        typeof res.data.total === 'number' && Number.isFinite(res.data.total)
+          ? res.data.total
+          : (res.data.list || []).length
+      )
+      if (keywordArg !== undefined) setKeyword(keywordArg.trim())
     } catch (e: any) {
       msg.error(e?.response?.data?.message || '加载失败')
     } finally {
@@ -535,12 +548,12 @@ const OpportunitiesPage: React.FC = () => {
               style={{ marginRight: 8, color: 'var(--ant-colorWarning)' }}
             />
             机会列表
-            {list.length > 0 && (
+            {(listTotal > 0 || keyword.trim()) && (
               <Text
                 type="secondary"
                 style={{ marginLeft: 8, fontWeight: 400, fontSize: 13 }}
               >
-                共 {list.length} 条
+                共 {listTotal} 条
               </Text>
             )}
           </span>
@@ -551,6 +564,20 @@ const OpportunitiesPage: React.FC = () => {
           </Button>
         }
       >
+        <div style={{ marginBottom: 16, maxWidth: 400 }}>
+          <Input.Search
+            placeholder="搜索名称、客户、阶段、备注"
+            allowClear
+            enterButton="查询"
+            value={keyword}
+            onChange={(e) => {
+              const v = e.target.value
+              setKeyword(v)
+              if (v === '') void fetchList('')
+            }}
+            onSearch={(v) => void fetchList(v)}
+          />
+        </div>
         <Table<OpportunityItem>
           rowKey="id"
           size="small"
