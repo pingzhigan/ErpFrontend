@@ -57,6 +57,7 @@ import {
   DatabaseOutlined,
   BellOutlined,
   ApiOutlined,
+  CarryOutOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 import { AuthProvider, useAuth } from './auth/AuthContext'
@@ -92,6 +93,7 @@ import {
   MaintenanceSchedulePage,
   OpportunitiesPage,
   OpportunityDetailPage,
+  OpportunityTodosPage,
   ProductsPage,
   ProjectAnalysisPage,
   ProjectProductListPage,
@@ -141,6 +143,12 @@ const appRoutes: AppRouteItem[] = [
     name: '机会管理',
     icon: <ThunderboltOutlined />,
     permission: 'opportunities',
+  },
+  {
+    path: '/opportunity-todos',
+    name: '待办事项',
+    icon: <CarryOutOutlined />,
+    permission: 'opportunity-todos',
   },
   {
     path: '/construction',
@@ -322,6 +330,24 @@ type WorkbenchReminders = {
     responsible: string
     planned_end: string
   }[]
+  constructionOpenByProject: {
+    project_name: string
+    total: number
+    statusStats: {
+      not_started: number
+      in_progress: number
+      delayed: number
+    }
+    list: {
+      id: number
+      project_name: string
+      task_name: string
+      content: string
+      responsible: string | null
+      planned_end: string | null
+      status: 'not_started' | 'in_progress' | 'delayed'
+    }[]
+  }[]
   minorWorkOpen: { id: number; code: string; title: string; status: string; due_at: string | null }[]
   maintenanceOpen: { id: number; code: string; title: string; status: string; due_at: string }[]
   totalCount: number
@@ -357,6 +383,12 @@ const MAINT_SCHEDULE_STATUS_LABEL: Record<string, string> = {
   overdue: '已逾期',
   completed: '已完成',
   cancelled: '已取消',
+}
+
+const CONSTRUCTION_PROGRESS_STATUS_LABEL: Record<'not_started' | 'in_progress' | 'delayed', string> = {
+  not_started: '未开始',
+  in_progress: '实施中',
+  delayed: '已延期',
 }
 
 const LayoutWithMenu: React.FC = () => {
@@ -608,26 +640,34 @@ const LayoutWithMenu: React.FC = () => {
                 <Divider style={{ margin: '8px 0' }} />
               </>
             ) : null}
-            {reminderData.constructionOverdue.length > 0 ? (
+            {reminderData.constructionOpenByProject.length > 0 ? (
               <>
-                <Typography.Text strong>施工管理 · 进度管理（超时任务）</Typography.Text>
+                <Typography.Text strong>施工管理 · 进度管理（未完成任务）</Typography.Text>
                 <List
                   size="small"
-                  dataSource={reminderData.constructionOverdue}
+                  dataSource={reminderData.constructionOpenByProject}
                   renderItem={(item) => (
                     <List.Item style={{ padding: '6px 0' }}>
-                      <a
-                        onClick={() => {
-                          setReminderOpen(false)
-                          navigate('/construction/progress')
-                        }}
-                      >
-                        {item.content || item.task_name || '（无标题）'}
-                      </a>
-                      <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                        {item.project_name} · 计划结束 {item.planned_end}
-                        {item.responsible ? ` · ${item.responsible}` : ''}
-                      </Typography.Text>
+                      <div style={{ width: '100%' }}>
+                        <a
+                          onClick={() => {
+                            setReminderOpen(false)
+                            navigate('/construction/progress')
+                          }}
+                        >
+                          {item.project_name}
+                        </a>
+                        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                          共 {item.total} 条 · 未开始 {item.statusStats.not_started} · 实施中 {item.statusStats.in_progress} · 已延期 {item.statusStats.delayed}
+                        </Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                          {item.list
+                            .slice(0, 3)
+                            .map((task) => `${task.content || task.task_name || '（无标题）'}（${CONSTRUCTION_PROGRESS_STATUS_LABEL[task.status]}）`)
+                            .join('；')}
+                          {item.list.length > 3 ? `；等 ${item.list.length} 条` : ''}
+                        </Typography.Text>
+                      </div>
                     </List.Item>
                   )}
                 />
@@ -1025,6 +1065,15 @@ const LayoutWithMenu: React.FC = () => {
               </RequireAuth>
             }
           />
+          <Route
+            path="/opportunity-todos"
+            element={
+              <RequireAuth permissions={['opportunity-todos']}>
+                <OpportunityTodosPage />
+              </RequireAuth>
+            }
+          />
+          <Route path="/opportunities/todos" element={<Navigate to="/opportunity-todos" replace />} />
           <Route
             path="/opportunities/detail/:id"
             element={

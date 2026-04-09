@@ -30,7 +30,7 @@ const STATUS_MAP: Record<string, { color: string; label: string }> = {
   completed: { color: 'success', label: '已竣工' },
 }
 
-type TimelineItem = { type: 'log' | 'status'; time: string; sortKey: string; data: any }
+type TimelineItem = { type: 'log' | 'status' | 'timeout'; time: string; sortKey: string; data: any }
 
 const ConstructionProjectDetailPage: React.FC = () => {
   const navigate = useNavigate()
@@ -128,11 +128,11 @@ const ConstructionProjectDetailPage: React.FC = () => {
       </Card>
 
       <Card>
-        <Title level={5} style={{ marginTop: 0, marginBottom: 16 }}>2. 项目时间线（施工日志与状态变更）</Title>
+        <Title level={5} style={{ marginTop: 0, marginBottom: 16 }}>2. 项目时间线（施工日志、状态变更、进度超时）</Title>
         {timelineLoading ? (
           <Text type="secondary">加载中…</Text>
         ) : timelineList.length === 0 ? (
-          <Text type="secondary">暂无施工日志与状态变更记录。</Text>
+          <Text type="secondary">暂无施工日志、状态变更与进度超时记录。</Text>
         ) : (
           <Timeline
             mode="left"
@@ -150,6 +150,27 @@ const ConstructionProjectDetailPage: React.FC = () => {
                       </div>
                       <div style={{ whiteSpace: 'pre-wrap', background: 'var(--ant-colorFillQuaternary)', padding: 8, borderRadius: 6 }}>
                         {(d.work_content ?? '').slice(0, 300)}{(d.work_content ?? '').length > 300 ? '…' : ''}
+                      </div>
+                    </div>
+                  ),
+                }
+              }
+              if (item.type === 'timeout') {
+                const d = item.data as { task_name: string; content: string; planned_end: string; created_at: string }
+                return {
+                  color: 'red',
+                  children: (
+                    <div>
+                      <div style={{ marginBottom: 4 }}>
+                        <Text strong>{(d.created_at ?? item.time).toString().slice(0, 10)}</Text>
+                        <Text type="secondary" style={{ marginLeft: 8 }}>进度超时</Text>
+                      </div>
+                      <div style={{ marginBottom: 4 }}>
+                        <Tag color="error">计划截止：{d.planned_end || '—'}</Tag>
+                        <Text style={{ marginLeft: 8 }}>{d.task_name || '未命名任务'}</Text>
+                      </div>
+                      <div style={{ whiteSpace: 'pre-wrap', background: 'var(--ant-colorFillQuaternary)', padding: 8, borderRadius: 6 }}>
+                        {(d.content ?? '').slice(0, 300)}{(d.content ?? '').length > 300 ? '…' : ''}
                       </div>
                     </div>
                   ),

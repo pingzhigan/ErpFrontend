@@ -535,7 +535,7 @@ const OpportunitiesPage: React.FC = () => {
               className="header-desc"
               style={{ display: 'block' }}
             >
-              管理销售机会，记录客户、预计金额与阶段；可与项目管理配合使用，赢单后可转为项目。
+              管理销售机会，记录客户、预计金额与阶段；可与项目管理配合使用，赢单后可转为项目。个人跟进任务可使用侧栏「待办事项」。
             </Text>
           </div>
         </div>

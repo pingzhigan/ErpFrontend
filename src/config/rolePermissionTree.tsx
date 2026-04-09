@@ -38,6 +38,7 @@ const SIDEBAR_ENTRIES: TopEntry[] = [
     ],
   },
   { kind: 'single', path: '/opportunities', name: '机会管理', permission: 'opportunities' },
+  { kind: 'single', path: '/opportunity-todos', name: '待办事项', permission: 'opportunity-todos' },
   {
     kind: 'group',
     groupPath: '/construction-mgr',
