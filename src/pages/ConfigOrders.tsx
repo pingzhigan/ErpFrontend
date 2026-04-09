@@ -58,6 +58,7 @@ export type ConfigOrderItemRow = {
   amount_incl_tax: number | null
   tax_rate: number | null
   remark: string | null
+  _key?: string
 }
 
 export type ConfigOrderDetail = ConfigOrderRecord & {

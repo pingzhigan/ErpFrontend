@@ -33,6 +33,7 @@ import {
 } from 'antd'
 import axios from 'axios'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import type { EventDataNode } from 'rc-tree/lib/interface'
 
 const { Title, Text } = Typography
 
@@ -453,8 +454,8 @@ const DingTalkAdminPage: React.FC = () => {
     void fetchDeptRoleMap()
   }, [fetchOrg, fetchMap, fetchRoleGroups, fetchDeptRoleMap])
 
-  const onTreeSelect = (_keys: React.Key[], info: { node: { key: string | number } }) => {
-    const id = Number(info.node.key)
+  const onTreeSelect = (_keys: React.Key[], info: { node: EventDataNode<DataNode> }) => {
+    const id = Number(String(info.node.key))
     if (!Number.isInteger(id) || id < 1) return
     setSelectedDeptId(id)
     void fetchDeptUsers(id)
@@ -560,7 +561,7 @@ const DingTalkAdminPage: React.FC = () => {
         ? String(v.business_type || '')
             .trim()
             .replace(/\s/g, '_')
-        : String(editingMap && editingMap !== 'new' ? editingMap.business_type : '').trim()
+        : String(editingMap ? editingMap.business_type : '').trim()
     if (!bt) {
       msg.warning('请填写业务类型')
       return

@@ -120,7 +120,7 @@ const KnowledgePage: React.FC = () => {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
-  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editingId] = useState<number | null>(null)
   const [form] = Form.useForm()
   const [typeFilter, setTypeFilter] = useState<string | undefined>(undefined)
   const [enabledFilter, setEnabledFilter] = useState<string | undefined>(undefined)
@@ -343,22 +343,6 @@ const KnowledgePage: React.FC = () => {
     } finally {
       setAddSaving(false)
     }
-  }
-
-  const openEdit = (row: Knowledge) => {
-    setEditingId(row.id)
-    form.setFieldsValue({
-      code: row.code,
-      title: row.title,
-      knowledge_type: row.knowledge_type,
-      system_type: row.system_type,
-      scene_tags: row.scene_tags ?? '',
-      content: row.content ?? '',
-      structured_json: row.structured_json ?? '',
-      keywords: row.keywords ?? '',
-      enabled: row.enabled === 1,
-    })
-    setModalOpen(true)
   }
 
   const handleSubmit = async () => {

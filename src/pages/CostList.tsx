@@ -419,6 +419,11 @@ const CostListPage: React.FC = () => {
             quantity: draft.quantity ?? null,
             cost_price: draft.cost_price ?? null,
             cost_amount: draft.cost_amount ?? null,
+            tax_rate: draft.tax_rate ?? null,
+            unit_price_excl_tax: draft.unit_price_excl_tax ?? null,
+            unit_price_incl_tax: draft.unit_price_incl_tax ?? null,
+            amount_excl_tax: draft.amount_excl_tax ?? null,
+            amount_incl_tax: draft.amount_incl_tax ?? null,
             remark: draft.remark ?? null,
             project_name: draft.project_name ?? null,
             category: draft.category ?? null,
@@ -551,9 +556,9 @@ const CostListPage: React.FC = () => {
       dataIndex: 'tax_rate',
       width: 80,
       align: 'right',
-      render: (v: number | null, row) => {
+      render: (_v: number | null, row) => {
         const display =
-          row.tax_rate != null && row.tax_rate !== ''
+          row.tax_rate != null
             ? row.tax_rate
             : row.cost_amount != null || row.cost_price != null
               ? DEFAULT_TAX_RATE
@@ -579,7 +584,7 @@ const CostListPage: React.FC = () => {
       dataIndex: 'unit_price_excl_tax',
       width: 96,
       align: 'right',
-      render: (v: number | null, row) => {
+      render: (_v: number | null, row) => {
         const taxRate = row.tax_rate ?? DEFAULT_TAX_RATE
         const r = 1 + taxRate / 100
         const display = row.unit_price_excl_tax ?? (row.unit_price_incl_tax != null ? Math.round((row.unit_price_incl_tax / r) * 100) / 100 : null) ?? (row.cost_price != null ? Math.round((row.cost_price / r) * 100) / 100 : null)
@@ -602,7 +607,7 @@ const CostListPage: React.FC = () => {
       dataIndex: 'unit_price_incl_tax',
       width: 96,
       align: 'right',
-      render: (v: number | null, row) => {
+      render: (_v: number | null, row) => {
         const taxRate = row.tax_rate ?? DEFAULT_TAX_RATE
         const r = 1 + taxRate / 100
         const display = row.unit_price_incl_tax ?? row.cost_price ?? (row.unit_price_excl_tax != null ? Math.round(row.unit_price_excl_tax * r * 100) / 100 : null)
@@ -625,7 +630,7 @@ const CostListPage: React.FC = () => {
       dataIndex: 'amount_excl_tax',
       width: 96,
       align: 'right',
-      render: (v: number | null, row) => {
+      render: (_v: number | null, row) => {
         const taxRate = row.tax_rate ?? DEFAULT_TAX_RATE
         const r = 1 + taxRate / 100
         const incl = row.amount_incl_tax ?? row.cost_amount
@@ -649,7 +654,7 @@ const CostListPage: React.FC = () => {
       dataIndex: 'amount_incl_tax',
       width: 96,
       align: 'right',
-      render: (v: number | null, row) => {
+      render: (_v: number | null, row) => {
         const taxRate = row.tax_rate ?? DEFAULT_TAX_RATE
         const r = 1 + taxRate / 100
         const display = row.amount_incl_tax ?? row.cost_amount ?? (row.amount_excl_tax != null ? Math.round(row.amount_excl_tax * r * 100) / 100 : null)
@@ -944,7 +949,7 @@ const CostListPage: React.FC = () => {
           >
             按条件删除
           </Button>
-          <Button onClick={fetchList}>刷新</Button>
+          <Button onClick={() => void fetchList()}>刷新</Button>
         </Space>
         <Modal
           title="按条件批量删除"

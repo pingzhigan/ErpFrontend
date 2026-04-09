@@ -1516,7 +1516,7 @@ const DocTasksExcelFormatPage: React.FC = () => {
     }
   }, [headers, token, msg])
 
-  const handleReloadFile = useCallback(async (filename: string, fileProjectName: string, listType: 'cost' | 'quote') => {
+  const handleReloadFile = useCallback(async (filename: string, fileProjectName: string, _listType: 'cost' | 'quote') => {
     try {
       const res = await axios.get<{ items?: Record<string, unknown>[]; project_name?: string }>(`/api/structured-exports/${encodeURIComponent(filename)}`, { headers })
       const items = res.data?.items ?? []

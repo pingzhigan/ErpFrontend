@@ -5,7 +5,7 @@
  */
 import { SaveOutlined, UploadOutlined, InboxOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { App, AutoComplete, Button, Card, Input, InputNumber, Select, Space, Table, Tag, Typography } from 'antd'
+import { App, AutoComplete, Button, Card, Input, InputNumber, Select, Table, Typography } from 'antd'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import axios from 'axios'
@@ -72,7 +72,7 @@ const AutoConfigPage: React.FC = () => {
   const [saveLoading, setSaveLoading] = useState(false)
   const [defaultTemplate, setDefaultTemplate] = useState<{ columnKeys: string[]; rows?: Record<string, unknown>[] } | null>(null)
   const [sessionTemplate, setSessionTemplate] = useState<{ columnKeys: string[] } | null>(null)
-  const [headerMapping, setHeaderMapping] = useState<HeaderMappingItem[] | null>(null)
+  const [, setHeaderMapping] = useState<HeaderMappingItem[] | null>(null)
   const [templateLoading, setTemplateLoading] = useState(false)
   const [streamingText, setStreamingText] = useState('')
   const [dragOver, setDragOver] = useState(false)
@@ -306,21 +306,6 @@ const AutoConfigPage: React.FC = () => {
     }
   }, [msg])
 
-  const confirmHeaderRule = useCallback(
-    async (item: HeaderMappingItem) => {
-      try {
-        await axios.post('/api/form-templates/header-rules', { header: item.header, columnKey: item.columnKey })
-        msg.success(`已加入规则库：「${item.header}」→ ${COLUMN_TITLES[item.columnKey] ?? item.columnKey}`)
-        setHeaderMapping((prev) =>
-          prev ? prev.filter((m) => !(m.header === item.header && m.columnKey === item.columnKey)) : null,
-        )
-      } catch (e: unknown) {
-        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '加入规则失败')
-      }
-    },
-    [msg],
-  )
-
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
@@ -417,13 +402,13 @@ const AutoConfigPage: React.FC = () => {
 
   /** 货物名称失焦时：若该行税率为空且当前有匹配到的商品，用第一个匹配商品的税率自动填充 */
   const autoFillTaxRateFromFirstMatch = useCallback(
-    (rowKey: string, index: number) => {
+    (rowKey: string) => {
       if (goodsSearchActiveRowKey !== rowKey || !goodsSearchResults.length) return
       const first = goodsSearchResults[0]
       if (first.tax_rate == null) return
       setFormList((prev) => {
         const row = prev.find((r) => r._key === rowKey)
-        if (!row || (row.tax_rate != null && row.tax_rate !== '')) return prev
+        if (!row || row.tax_rate != null) return prev
         return prev.map((r) => (r._key !== rowKey ? r : { ...r, tax_rate: first.tax_rate }))
       })
       msg.success('已根据匹配商品填充税率')
@@ -504,7 +489,7 @@ const AutoConfigPage: React.FC = () => {
                   if (hasEnoughChars) fetchGoodsSearch(currentVal.trim(), record._key)
                 }}
                 onBlur={() => {
-                  setTimeout(() => autoFillTaxRateFromFirstMatch(record._key, index), 150)
+                  setTimeout(() => autoFillTaxRateFromFirstMatch(record._key), 150)
                 }}
                 onSearch={(val) => onGoodsNameSearch(val, record._key)}
                 onChange={(val) => updateFormRow(index, 'goods_name', val)}

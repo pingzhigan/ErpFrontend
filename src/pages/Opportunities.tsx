@@ -208,11 +208,6 @@ const OpportunitiesPage: React.FC = () => {
     setEditModalOpen(true)
   }
 
-  const appendAssistantReply = (content: string) => {
-    setChatMessages((prev) => [...prev, { role: 'assistant', content }])
-    setTimeout(() => addChatListRef.current?.scrollTo({ top: 1e9, behavior: 'smooth' }), 50)
-  }
-
   const handleAddChatSend = async () => {
     const text = addInputValue.trim()
     if (!text || addChatLoading) return

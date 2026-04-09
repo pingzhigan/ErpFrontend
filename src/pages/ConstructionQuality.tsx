@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Badge, Card, Descriptions, Modal, Space, Table, Tag, Typography } from 'antd'
+import { Card, Descriptions, Modal, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 
 const { Title } = Typography

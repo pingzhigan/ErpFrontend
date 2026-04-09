@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import dayjs from 'dayjs'
+import type { Dayjs } from 'dayjs'
 import { useAuth } from '../auth/AuthContext'
 import {
   assigneeLabelMap,
@@ -37,6 +38,16 @@ interface ProjectInfo {
   /** 创建人用户 id；历史数据可能为空，仅管理员可删 */
   created_by_user_id?: number | null
   audit?: ConstructionAudit
+}
+
+type ProjectFormValues = {
+  name?: string
+  client?: string
+  manager?: string
+  startDate?: Dayjs
+  endDate?: Dayjs
+  status?: string
+  description?: string
 }
 
 function constructionAuditLabel(audit: ConstructionAudit | undefined): { text: string; color: string } | null {
@@ -205,8 +216,8 @@ const ConstructionProjectInfoPage: React.FC = () => {
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editingRecord, setEditingRecord] = useState<ProjectInfo | null>(null)
   const [createModalOpen, setCreateModalOpen] = useState(false)
-  const [form] = Form.useForm<ProjectInfo>()
-  const [createForm] = Form.useForm<Partial<ProjectInfo>>()
+  const [form] = Form.useForm<ProjectFormValues>()
+  const [createForm] = Form.useForm<ProjectFormValues>()
   const [dingSubmittingId, setDingSubmittingId] = useState<number | null>(null)
 
   const handleEdit = async (r: ProjectInfo) => {

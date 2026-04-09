@@ -43,7 +43,7 @@ function sortByProjectThenSequence(items: Product[]): Product[] {
   })
 }
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 export type Product = {
   id: number
@@ -309,7 +309,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'sequence_no',
       width: 64,
       align: 'right',
-      render: (v, row, index) =>
+      render: (_v, row, index) =>
         cell(
           'sequence_no',
           row,
@@ -328,7 +328,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'goods_name',
       width: 140,
       ellipsis: true,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'goods_name',
           row,
@@ -346,7 +346,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'brand',
       width: 90,
       ellipsis: true,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell('brand', row, (x) => cellTooltip(String(x ?? '')), (
           <Input size="small" value={editingRow?.brand ?? ''} onChange={(e) => updateEditingField('brand', e.target.value)} />
         )),
@@ -356,7 +356,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'model',
       width: 120,
       ellipsis: true,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell('model', row, (x) => cellTooltip(String(x ?? '')), (
           <Input size="small" value={editingRow?.model ?? ''} onChange={(e) => updateEditingField('model', e.target.value)} />
         )),
@@ -366,7 +366,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'params',
       width: 120,
       ellipsis: true,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'params',
           row,
@@ -383,7 +383,7 @@ const ProductsPage: React.FC = () => {
       title: '单位',
       dataIndex: 'unit',
       width: 56,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell('unit', row, (x) => (x != null ? String(x) : ''), (
           <Input size="small" value={editingRow?.unit ?? ''} onChange={(e) => updateEditingField('unit', e.target.value)} />
         )),
@@ -393,7 +393,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'quantity',
       width: 72,
       align: 'right',
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'quantity',
           row,
@@ -412,7 +412,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'unit_price_excl_tax',
       width: 96,
       align: 'right',
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'unit_price_excl_tax',
           row,
@@ -432,7 +432,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'unit_price_incl_tax',
       width: 96,
       align: 'right',
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'unit_price_incl_tax',
           row,
@@ -452,7 +452,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'amount_excl_tax',
       width: 96,
       align: 'right',
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'amount_excl_tax',
           row,
@@ -472,7 +472,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'amount_incl_tax',
       width: 96,
       align: 'right',
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'amount_incl_tax',
           row,
@@ -492,7 +492,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'remark',
       width: 80,
       ellipsis: true,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell('remark', row, (x) => cellTooltip(String(x ?? '')), (
           <Input size="small" value={editingRow?.remark ?? ''} onChange={(e) => updateEditingField('remark', e.target.value)} />
         )),
@@ -502,7 +502,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'project_name',
       width: 120,
       ellipsis: true,
-      render: (v, row) => {
+      render: (_v, row) => {
         if (projectNameEditingId === row.id) {
           return (
             <Input
@@ -560,7 +560,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'category',
       width: 80,
       ellipsis: true,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell('category', row, (x) => cellTooltip(String(x ?? '')), (
           <Input size="small" value={editingRow?.category ?? ''} onChange={(e) => updateEditingField('category', e.target.value)} />
         )),
@@ -570,7 +570,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'supplier',
       width: 90,
       ellipsis: true,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell('supplier', row, (x) => cellTooltip(String(x ?? '')), (
           <Input size="small" value={editingRow?.supplier ?? ''} onChange={(e) => updateEditingField('supplier', e.target.value)} />
         )),
@@ -579,7 +579,7 @@ const ProductsPage: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       width: 72,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'status',
           row,
@@ -599,7 +599,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'source_file',
       width: 100,
       ellipsis: true,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell('source_file', row, (x) => cellTooltip(String(x ?? '')), (
           <Input size="small" value={editingRow?.source_file ?? ''} onChange={(e) => updateEditingField('source_file', e.target.value)} />
         )),
@@ -609,7 +609,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'sku',
       width: 100,
       ellipsis: true,
-      render: (v, row) =>
+      render: (_v, row) =>
         cell('sku', row, (x) => cellTooltip(String(x ?? '')), (
           <Input size="small" value={editingRow?.sku ?? ''} onChange={(e) => updateEditingField('sku', e.target.value)} />
         )),
@@ -619,7 +619,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'cost_price',
       width: 80,
       align: 'right',
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'cost_price',
           row,
@@ -639,7 +639,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'tax_rate',
       width: 72,
       align: 'right',
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'tax_rate',
           row,
@@ -660,7 +660,7 @@ const ProductsPage: React.FC = () => {
       dataIndex: 'stock_quantity',
       width: 84,
       align: 'right',
-      render: (v, row) =>
+      render: (_v, row) =>
         cell(
           'stock_quantity',
           row,
@@ -771,7 +771,7 @@ const ProductsPage: React.FC = () => {
           >
             按条件删除
           </Button>
-          <Button onClick={fetchList}>刷新</Button>
+          <Button onClick={() => void fetchList()}>刷新</Button>
         </Space>
         <Modal
           title="按条件批量删除"

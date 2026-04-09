@@ -536,7 +536,7 @@ const InventoryMaintainPage: React.FC = () => {
       key: 'cost_amount',
       width: 90,
       align: 'right' as const,
-      render: (_: unknown, row, i) => {
+      render: (_: unknown, row) => {
         const q = row.quantity != null ? Number(row.quantity) : NaN
         const p = row.unit_price != null ? Number(row.unit_price) : NaN
         if (Number.isNaN(q) || Number.isNaN(p)) return '—'
