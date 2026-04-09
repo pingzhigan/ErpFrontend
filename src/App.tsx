@@ -149,6 +149,7 @@ const appRoutes: AppRouteItem[] = [
     name: '待办事项',
     icon: <CarryOutOutlined />,
     permission: 'opportunity-todos',
+    hideInMenu: true,
   },
   {
     path: '/construction',
