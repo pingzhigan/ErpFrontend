@@ -37,7 +37,7 @@ import {
 } from 'antd'
 import axios from 'axios'
 import dayjs, { type Dayjs } from 'dayjs'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { DueCountdownCell, useNowEverySecond } from '../components/DueCountdownCell'
 import { auditGateAllowsEditWhenNotApproving } from '../utils/auditGateUi'
@@ -54,7 +54,7 @@ const { Search } = Input
 const { TextArea } = Input
 
 type MaintenanceTaskStatus = 'scheduled' | 'in_progress' | 'overdue' | 'completed' | 'cancelled'
-type TaskType = 'inspect' | 'repair' | 'maintain' | 'routine' | 'upgrade'
+type TaskType = 'inspect' | 'repair' | 'maintain' | 'routine'
 
 type GateAudit = {
   dingtalk_gate: boolean
@@ -168,6 +168,87 @@ function validateLogImageFile(file: File): string | null {
   return null
 }
 
+/** 列表缩略图只需较小边长；大图仍按完整分辨率解码会导致界面卡顿 */
+const LOG_PREVIEW_MAX_EDGE = 720
+/** 超限的长边会先缩小再提交，减轻上传与后端压力 */
+const LOG_UPLOAD_MAX_EDGE = 3840
+
+function loadImageFromObjectUrl(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.decoding = 'async'
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('load'))
+    img.src = url
+  })
+}
+
+/**
+ * 生成「小预览 blob URL」并在边过长时缩小待上传文件，避免超大分辨率图片拖慢主线程。
+ */
+async function prepareLogImageFile(file: File): Promise<{ file: File; previewUrl: string }> {
+  const srcUrl = URL.createObjectURL(file)
+  try {
+    const img = await loadImageFromObjectUrl(srcUrl)
+    const w = img.naturalWidth
+    const h = img.naturalHeight
+    if (!w || !h) {
+      throw new Error('无法读取图片')
+    }
+
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      return { file, previewUrl: srcUrl }
+    }
+
+    const maxDim = Math.max(w, h)
+    let outFile = file
+
+    if (maxDim > LOG_UPLOAD_MAX_EDGE) {
+      const s = LOG_UPLOAD_MAX_EDGE / maxDim
+      const uW = Math.max(1, Math.round(w * s))
+      const uH = Math.max(1, Math.round(h * s))
+      canvas.width = uW
+      canvas.height = uH
+      ctx.drawImage(img, 0, 0, uW, uH)
+      const upBlob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92))
+      if (upBlob) {
+        const base = file.name.replace(/\.[^.]+$/, '') || 'image'
+        outFile = new File([upBlob], `${base}.jpg`, { type: 'image/jpeg' })
+      }
+    }
+
+    const previewScale = Math.min(1, LOG_PREVIEW_MAX_EDGE / maxDim)
+    const pW = Math.max(1, Math.round(w * previewScale))
+    const pH = Math.max(1, Math.round(h * previewScale))
+    canvas.width = pW
+    canvas.height = pH
+    ctx.drawImage(img, 0, 0, pW, pH)
+    const previewBlob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.88))
+
+    URL.revokeObjectURL(srcUrl)
+
+    let previewUrl: string
+    if (previewBlob) {
+      previewUrl = URL.createObjectURL(previewBlob)
+    } else {
+      previewUrl = URL.createObjectURL(outFile)
+    }
+
+    const again = validateLogImageFile(outFile)
+    if (again) {
+      URL.revokeObjectURL(previewUrl)
+      throw new Error(again)
+    }
+
+    return { file: outFile, previewUrl }
+  } catch (e) {
+    URL.revokeObjectURL(srcUrl)
+    throw e instanceof Error ? e : new Error('处理图片失败')
+  }
+}
+
 /** 追加操作记录时，更新后进度的默认值与下限：当前 +10%，上限 100% */
 function minProgressAfterAppend(current: number): number {
   const p = Math.min(100, Math.max(0, Math.round(Number(current))))
@@ -186,19 +267,26 @@ const TYPE_MAP: Record<string, string> = {
   inspect: '巡检',
   repair: '维修',
   maintain: '维护',
-  routine: '例行维护',
-  upgrade: '升级改造',
+  routine: '其他任务',
+  /** 历史数据：展示与 routine 相同 */
+  upgrade: '其他任务',
 }
 
 const TYPE_OPTIONS = [
   { value: 'inspect', label: '巡检' },
-  { value: 'repair', label: '维修' },
   { value: 'maintain', label: '维护' },
-  { value: 'routine', label: '例行维护' },
-  { value: 'upgrade', label: '升级改造' },
-]
+  { value: 'repair', label: '维修' },
+  { value: 'routine', label: '其他任务' },
+] as const
 
-const VALID_MAINTENANCE_TASK_TYPES = new Set(TYPE_OPTIONS.map((o) => o.value))
+const VALID_MAINTENANCE_TASK_TYPES = new Set<string>(TYPE_OPTIONS.map((o) => o.value))
+
+function normalizeTaskTypeForForm(raw: string): TaskType {
+  const t = String(raw ?? '').trim()
+  if (t === 'upgrade') return 'routine'
+  if (VALID_MAINTENANCE_TASK_TYPES.has(t)) return t as TaskType
+  return 'inspect'
+}
 
 const LOG_ACTION_LABEL: Record<string, string> = {
   note: '记录',
@@ -329,6 +417,134 @@ function formatDueAtText(v: string | null | undefined): string {
   return d.isValid() ? s : '—'
 }
 
+/**
+ * 列表单独订阅 useNowEverySecond，避免每秒刷新整个页面（含办理 Drawer），造成抽屉内滚动卡顿。
+ */
+const MaintenanceScheduleListTable = memo(function MaintenanceScheduleListTable({
+  list,
+  loading,
+  openDetail,
+  onEditClick,
+  onSubmitDingTalk,
+  onDelete,
+  dingSubmittingId,
+}: {
+  list: MaintenanceTask[]
+  loading: boolean
+  openDetail: (r: MaintenanceTask) => void
+  onEditClick: (r: MaintenanceTask) => void
+  onSubmitDingTalk: (id: number) => void | Promise<void>
+  onDelete: (id: number) => void | Promise<void>
+  dingSubmittingId: number | null
+}) {
+  const listNow = useNowEverySecond()
+  const columns: ColumnsType<MaintenanceTask> = useMemo(
+    () => [
+      { title: '排单号', dataIndex: 'code', width: 130 },
+      { title: '任务标题', dataIndex: 'title', ellipsis: true, width: 220 },
+      {
+        title: '类型',
+        dataIndex: 'task_type',
+        width: 100,
+        render: (v: string) => TYPE_MAP[v] ?? v,
+      },
+      {
+        title: '截止时间',
+        dataIndex: 'due_at',
+        width: 208,
+        render: (v: string, r: MaintenanceTask) =>
+          r.status === 'completed' ? formatDueAtText(v) : <DueCountdownCell dueAt={v} now={listNow} />,
+      },
+      {
+        title: '进度',
+        dataIndex: 'progress',
+        width: 140,
+        render: (v: number) => <Progress percent={v} size="small" />,
+      },
+      {
+        title: '状态',
+        dataIndex: 'status',
+        width: 96,
+        render: (v: string) => {
+          const s = STATUS_MAP[v] ?? { color: 'default', label: v }
+          return <Tag color={s.color}>{s.label}</Tag>
+        },
+      },
+      {
+        title: '执行人',
+        dataIndex: 'assignee',
+        width: 120,
+        ellipsis: true,
+        render: (v: string | null) =>
+          sanitizeNullableText(v) ? sanitizeNullableText(v) : <Text type="secondary">待分配</Text>,
+      },
+      {
+        title: '审批',
+        key: 'audit',
+        width: 100,
+        render: (_: unknown, r: MaintenanceTask) => {
+          const lab = mtAuditLabel(r.audit)
+          return lab ? <Tag color={lab.color}>{lab.text}</Tag> : <Text type="secondary">—</Text>
+        },
+      },
+      {
+        title: '操作',
+        width: 198,
+        fixed: 'right',
+        render: (_, r) => (
+          <Space size={[4, 4]} wrap>
+            <a onClick={() => openDetail(r)}>办理</a>
+            {canEditMtBasicInfo(r) ? (
+              <a
+                onClick={() => {
+                  onEditClick(r)
+                }}
+              >
+                编辑
+              </a>
+            ) : null}
+            {mtDingSubmitAllowed(r.audit, r) ? (
+              <a
+                onClick={() => void onSubmitDingTalk(r.id)}
+                style={{
+                  opacity: dingSubmittingId === r.id ? 0.5 : 1,
+                  pointerEvents: dingSubmittingId === r.id ? 'none' : undefined,
+                }}
+              >
+                {dingSubmittingId === r.id ? '提交中…' : '提交钉钉审批'}
+              </a>
+            ) : canSubmitMtDingTalk(r.audit) ? (
+              <Tooltip title="请先在详情中分配执行人">
+                <Text type="secondary">提交钉钉审批</Text>
+              </Tooltip>
+            ) : null}
+            {canDeleteMtWithAudit(r.audit) ? (
+              <Popconfirm title="确定删除该任务？" onConfirm={() => void onDelete(r.id)}>
+                <a style={{ color: 'var(--ant-colorError)' }}>删除</a>
+              </Popconfirm>
+            ) : (
+              <Text type="secondary">删除</Text>
+            )}
+          </Space>
+        ),
+      },
+    ],
+    [listNow, openDetail, onEditClick, onSubmitDingTalk, onDelete, dingSubmittingId],
+  )
+
+  return (
+    <Table
+      rowKey="id"
+      dataSource={list}
+      columns={columns}
+      loading={loading}
+      pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }}
+      size="middle"
+      scroll={{ x: 1328 }}
+    />
+  )
+})
+
 const MaintenanceSchedulePage: React.FC = () => {
   const { message: msg } = App.useApp()
   const [list, setList] = useState<MaintenanceTask[]>([])
@@ -344,7 +560,6 @@ const MaintenanceSchedulePage: React.FC = () => {
   const editDueAtLastDayKeyRef = useRef<string | null>(null)
   const editRecordRef = useRef<MaintenanceTask | null>(null)
   const [editSubmitting, setEditSubmitting] = useState(false)
-  const listNow = useNowEverySecond()
   const [createSubmitting, setCreateSubmitting] = useState(false)
 
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -426,7 +641,7 @@ const MaintenanceSchedulePage: React.FC = () => {
       const tt = String(rec.task_type)
       editForm.setFieldsValue({
         title: rec.title,
-        task_type: VALID_MAINTENANCE_TASK_TYPES.has(tt) ? tt : 'inspect',
+        task_type: normalizeTaskTypeForForm(tt),
         due_at: d,
         content: rec.content ?? '',
       })
@@ -494,10 +709,16 @@ const MaintenanceSchedulePage: React.FC = () => {
     }
   }, [drawerOpen, detailId, loadDetail])
 
-  const openDetail = (r: MaintenanceTask) => {
+  const openDetail = useCallback((r: MaintenanceTask) => {
     setDetailId(r.id)
     setDrawerOpen(true)
-  }
+  }, [])
+
+  const onTableEditClick = useCallback((r: MaintenanceTask) => {
+    editRecordRef.current = r
+    setEditRecord(r)
+    setEditOpen(true)
+  }, [])
 
   const submitAssign = async () => {
     if (!detailId || !task) return
@@ -668,23 +889,32 @@ const MaintenanceSchedulePage: React.FC = () => {
     }
   }
 
-  const addPendingLogImage = useCallback((file: File) => {
-    if (!mtLogActionsAllowed(task?.audit, task ?? null)) {
-      msg.warning(
-        !mtTaskHasAssignee(task)
-          ? '请先分配任务执行人'
-          : '须先在钉钉完成审批通过后，方可添加操作记录附图',
-      )
-      return
-    }
-    const err = validateLogImageFile(file)
-    if (err) {
-      msg.error(err)
-      return
-    }
-    const previewUrl = URL.createObjectURL(file)
-    setPendingLogImages((prev) => [...prev, { file, previewUrl }])
-  }, [msg, task])
+  const addPendingLogImage = useCallback(
+    (file: File) => {
+      if (!mtLogActionsAllowed(task?.audit, task ?? null)) {
+        msg.warning(
+          !mtTaskHasAssignee(task)
+            ? '请先分配任务执行人'
+            : '须先在钉钉完成审批通过后，方可添加操作记录附图',
+        )
+        return
+      }
+      const err = validateLogImageFile(file)
+      if (err) {
+        msg.error(err)
+        return
+      }
+      void (async () => {
+        try {
+          const prepared = await prepareLogImageFile(file)
+          setPendingLogImages((prev) => [...prev, prepared])
+        } catch (e) {
+          msg.error(e instanceof Error ? e.message : '处理图片失败')
+        }
+      })()
+    },
+    [msg, task],
+  )
 
   const onLogContentPaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -811,35 +1041,43 @@ const MaintenanceSchedulePage: React.FC = () => {
     [detailId, msg],
   )
 
-  const submitMtDingTalk = async (id: number, fromDrawer?: boolean) => {
-    if (fromDrawer) setDrawerDingSubmitting(true)
-    else setDingSubmittingId(id)
-    try {
-      await axios.post(`/api/maintenance-tasks/${id}/dingtalk/submit`)
-      msg.success('已提交钉钉审批，请在钉钉中处理流程')
-      if (fromDrawer && detailId === id) await loadDetail(id)
-      fetchList()
-    } catch (e: unknown) {
-      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '提交失败')
-    } finally {
-      setDingSubmittingId(null)
-      setDrawerDingSubmitting(false)
-    }
-  }
-
-  const handleDelete = async (id: number) => {
-    try {
-      await axios.delete(`/api/maintenance-tasks/${id}`)
-      msg.success('已删除')
-      if (detailId === id) {
-        setDrawerOpen(false)
-        setDetailId(null)
+  const submitMtDingTalk = useCallback(
+    async (id: number, fromDrawer?: boolean) => {
+      if (fromDrawer) setDrawerDingSubmitting(true)
+      else setDingSubmittingId(id)
+      try {
+        await axios.post(`/api/maintenance-tasks/${id}/dingtalk/submit`)
+        msg.success('已提交钉钉审批，请在钉钉中处理流程')
+        if (fromDrawer && detailId === id) await loadDetail(id)
+        fetchList()
+      } catch (e: unknown) {
+        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '提交失败')
+      } finally {
+        setDingSubmittingId(null)
+        setDrawerDingSubmitting(false)
       }
-      fetchList()
-    } catch (e: unknown) {
-      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '删除失败')
-    }
-  }
+    },
+    [detailId, fetchList, loadDetail, msg],
+  )
+
+  const handleDelete = useCallback(
+    async (id: number) => {
+      try {
+        await axios.delete(`/api/maintenance-tasks/${id}`)
+        msg.success('已删除')
+        if (detailId === id) {
+          setDrawerOpen(false)
+          setDetailId(null)
+        }
+        fetchList()
+      } catch (e: unknown) {
+        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '删除失败')
+      }
+    },
+    [detailId, fetchList, msg],
+  )
+
+  const submitMtDingTalkFromList = useCallback((id: number) => void submitMtDingTalk(id), [submitMtDingTalk])
 
   const canAddLog = Boolean(task && task.status !== 'completed' && task.status !== 'cancelled')
 
@@ -848,95 +1086,6 @@ const MaintenanceSchedulePage: React.FC = () => {
     if (!a) return null
     return assigneeLabelMap(assignSelectOptions).get(a) ?? a
   }, [task?.assignee, assignSelectOptions])
-
-  const columns: ColumnsType<MaintenanceTask> = [
-    { title: '排单号', dataIndex: 'code', width: 130 },
-    { title: '任务标题', dataIndex: 'title', ellipsis: true, width: 220 },
-    {
-      title: '类型',
-      dataIndex: 'task_type',
-      width: 100,
-      render: (v: string) => TYPE_MAP[v] ?? v,
-    },
-    {
-      title: '截止时间',
-      dataIndex: 'due_at',
-      width: 208,
-      render: (v: string, r: MaintenanceTask) =>
-        r.status === 'completed' ? formatDueAtText(v) : <DueCountdownCell dueAt={v} now={listNow} />,
-    },
-    {
-      title: '进度',
-      dataIndex: 'progress',
-      width: 140,
-      render: (v: number) => <Progress percent={v} size="small" />,
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 96,
-      render: (v: string) => {
-        const s = STATUS_MAP[v] ?? { color: 'default', label: v }
-        return <Tag color={s.color}>{s.label}</Tag>
-      },
-    },
-    {
-      title: '执行人',
-      dataIndex: 'assignee',
-      width: 120,
-      ellipsis: true,
-      render: (v: string | null) => (sanitizeNullableText(v) ? sanitizeNullableText(v) : <Text type="secondary">待分配</Text>),
-    },
-    {
-      title: '审批',
-      key: 'audit',
-      width: 100,
-      render: (_: unknown, r: MaintenanceTask) => {
-        const lab = mtAuditLabel(r.audit)
-        return lab ? <Tag color={lab.color}>{lab.text}</Tag> : <Text type="secondary">—</Text>
-      },
-    },
-    {
-      title: '操作',
-      width: 198,
-      fixed: 'right',
-      render: (_, r) => (
-        <Space size={[4, 4]} wrap>
-          <a onClick={() => openDetail(r)}>办理</a>
-          {canEditMtBasicInfo(r) ? (
-            <a
-              onClick={() => {
-                editRecordRef.current = r
-                setEditRecord(r)
-                setEditOpen(true)
-              }}
-            >
-              编辑
-            </a>
-          ) : null}
-          {mtDingSubmitAllowed(r.audit, r) ? (
-            <a
-              onClick={() => void submitMtDingTalk(r.id)}
-              style={{ opacity: dingSubmittingId === r.id ? 0.5 : 1, pointerEvents: dingSubmittingId === r.id ? 'none' : undefined }}
-            >
-              {dingSubmittingId === r.id ? '提交中…' : '提交钉钉审批'}
-            </a>
-          ) : canSubmitMtDingTalk(r.audit) ? (
-            <Tooltip title="请先在详情中分配执行人">
-              <Text type="secondary">提交钉钉审批</Text>
-            </Tooltip>
-          ) : null}
-          {canDeleteMtWithAudit(r.audit) ? (
-            <Popconfirm title="确定删除该任务？" onConfirm={() => void handleDelete(r.id)}>
-              <a style={{ color: 'var(--ant-colorError)' }}>删除</a>
-            </Popconfirm>
-          ) : (
-            <Text type="secondary">删除</Text>
-          )}
-        </Space>
-      ),
-    },
-  ]
 
   return (
     <Card>
@@ -959,14 +1108,14 @@ const MaintenanceSchedulePage: React.FC = () => {
         </Button>
       </Space>
 
-      <Table
-        rowKey="id"
-        dataSource={list}
-        columns={columns}
+      <MaintenanceScheduleListTable
+        list={list}
         loading={loading}
-        pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }}
-        size="middle"
-        scroll={{ x: 1328 }}
+        openDetail={openDetail}
+        onEditClick={onTableEditClick}
+        onSubmitDingTalk={submitMtDingTalkFromList}
+        onDelete={handleDelete}
+        dingSubmittingId={dingSubmittingId}
       />
 
       <Modal
@@ -1003,7 +1152,7 @@ const MaintenanceSchedulePage: React.FC = () => {
             <Input placeholder="简要概括" />
           </Form.Item>
           <Form.Item name="task_type" label="类型" rules={[{ required: true, message: '请选择类型' }]}>
-            <Select options={TYPE_OPTIONS} placeholder="巡检 / 维修 / 维护等" />
+            <Select options={TYPE_OPTIONS} placeholder="巡检 / 维护 / 维修 / 其他任务" />
           </Form.Item>
           <Form.Item
             name="due_at"
@@ -1059,7 +1208,7 @@ const MaintenanceSchedulePage: React.FC = () => {
             <Input placeholder="简要概括" />
           </Form.Item>
           <Form.Item name="task_type" label="类型" rules={[{ required: true, message: '请选择类型' }]}>
-            <Select options={TYPE_OPTIONS} placeholder="巡检 / 维修 / 维护等" />
+            <Select options={TYPE_OPTIONS} placeholder="巡检 / 维护 / 维修 / 其他任务" />
           </Form.Item>
           <Form.Item
             name="due_at"
@@ -1309,6 +1458,7 @@ const MaintenanceSchedulePage: React.FC = () => {
                                 <img
                                   src={it.previewUrl}
                                   alt=""
+                                  decoding="async"
                                   style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--ant-colorBorder)' }}
                                 />
                                 <Button
