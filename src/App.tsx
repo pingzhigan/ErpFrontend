@@ -58,6 +58,7 @@ import {
   BellOutlined,
   ApiOutlined,
   CarryOutOutlined,
+  InfoCircleOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 import { AuthProvider, useAuth } from './auth/AuthContext'
@@ -103,6 +104,7 @@ import {
   WorkbenchPushMessagesPage,
 } from './lazyPages'
 import './App.css'
+import { APP_VERSION, SYSTEM_RELEASE_NOTES } from './systemRelease'
 
 /** 侧栏品牌图，对应 `frontend/public/logo.png`（Vite 构建时置于站点根路径） */
 const LAYOUT_LOGO_SRC = `${import.meta.env.BASE_URL}logo.png`
@@ -474,6 +476,8 @@ const LayoutWithMenu: React.FC = () => {
   }, [embeddingForm, msg, user?.token])
   const [menuOpenKeys, setMenuOpenKeys] = useState<string[]>(() => menuOpenKeysFromPath)
 
+  const [systemInfoOpen, setSystemInfoOpen] = useState(false)
+
   const [reminderOpen, setReminderOpen] = useState(false)
   const [reminderData, setReminderData] = useState<WorkbenchReminders | null>(null)
   const [reminderLoading, setReminderLoading] = useState(false)
@@ -839,7 +843,17 @@ const LayoutWithMenu: React.FC = () => {
           </a>
         )
       }}
-      rightContentRender={() => null}
+      rightContentRender={() => (
+        <Tooltip title="系统版本与更新说明">
+          <Button
+            type="text"
+            aria-label="系统版本与更新说明"
+            icon={<InfoCircleOutlined style={{ fontSize: 18, color: 'var(--ant-colorTextSecondary)' }} />}
+            style={{ padding: '4px 10px' }}
+            onClick={() => setSystemInfoOpen(true)}
+          />
+        </Tooltip>
+      )}
       menuFooterRender={() => (
         <div style={{ borderTop: '1px solid rgba(5, 5, 5, 0.06)' }}>
           <div
@@ -940,6 +954,43 @@ const LayoutWithMenu: React.FC = () => {
         </div>
       )}
     >
+      <Modal
+        title="系统信息"
+        open={systemInfoOpen}
+        onCancel={() => setSystemInfoOpen(false)}
+        footer={
+          <Button type="primary" onClick={() => setSystemInfoOpen(false)}>
+            关闭
+          </Button>
+        }
+        destroyOnClose
+        width={560}
+      >
+        <Typography.Paragraph style={{ marginBottom: 16 }}>
+          <Typography.Text strong>当前版本：</Typography.Text>{' '}
+          <Typography.Text code>{APP_VERSION}</Typography.Text>
+        </Typography.Paragraph>
+        <Typography.Title level={5} style={{ marginTop: 0, marginBottom: 12 }}>
+          更新说明
+        </Typography.Title>
+        <div style={{ maxHeight: 360, overflow: 'auto', paddingRight: 4 }}>
+          {SYSTEM_RELEASE_NOTES.map((rel) => (
+            <div key={rel.version} style={{ marginBottom: 16 }}>
+              <Typography.Text strong>
+                {rel.version}
+                {rel.date ? `（${rel.date}）` : ''}
+              </Typography.Text>
+              <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+                {rel.items.map((t, i) => (
+                  <li key={i} style={{ marginBottom: 6 }}>
+                    {t}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </Modal>
       <Modal
         title="系统设置"
         open={settingsOpen && isAdmin}

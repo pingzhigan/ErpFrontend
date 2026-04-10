@@ -85,8 +85,6 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
     try {
       setProjectOptionsLoading(true)
       const params = new URLSearchParams()
-      /** 批量创建进度任务页：仅展示尚未有任何进度任务（未删除）的施工项目 */
-      params.set('without_progress_tasks', '1')
       if (keyword != null && keyword.trim()) params.set('keyword', keyword.trim())
       const res = await axios.get<{ list: ConstructionProjectListRow[]; total: number }>(
         `/api/construction/projects?${params.toString()}`,
@@ -146,6 +144,21 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
     if (!sheetFilter) return rows
     return rows.filter((r) => r.sheet_name === sheetFilter)
   }, [rows, sheetFilter])
+
+  /** 当前表格可见行（filtered）中仍被勾选的条数；提交时只提交这部分，避免筛选后仍带上其它 Sheet 的 key */
+  const selectedInFilteredCount = useMemo(() => {
+    const set = new Set(selectedKeys.map(String))
+    return filtered.filter((r) => set.has(r.key)).length
+  }, [filtered, selectedKeys])
+
+  useEffect(() => {
+    const inView = new Set(filtered.map((r) => String(r.key)))
+    setSelectedKeys((prev) => {
+      const next = prev.filter((k) => inView.has(String(k)))
+      if (next.length === prev.length && next.every((k, i) => k === prev[i])) return prev
+      return next
+    })
+  }, [filtered])
 
   const applyResponsible = (scope: 'all' | 'filtered' | 'selected') => {
     const value = defaultResponsible.trim()
@@ -281,9 +294,9 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
       return
     }
     const pickedSet = new Set(selectedKeys.map(String))
-    const picked = rows.filter((r) => pickedSet.has(r.key))
+    const picked = filtered.filter((r) => pickedSet.has(r.key))
     if (!picked.length) {
-      msg.warning('请至少选择一条')
+      msg.warning(sheetFilter ? '请在当前筛选结果中至少勾选一条' : '请至少选择一条')
       return
     }
     if (!bulkPlannedStart.trim() || !bulkPlannedEnd.trim()) {
@@ -380,7 +393,7 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
 
       <Card size="small" title="第一步：选择项目并加载候选" style={{ marginBottom: 16 }}>
         <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-          下拉中仅显示<strong>尚未创建任何进度任务</strong>的施工项目（若项目下已有进度任务，请直接在进度管理中维护）。选择项目后，将根据该项目的报价清单按商品名称汇总生成任务候选。点击「加载候选」时将弹出窗口确认计划周期（默认与项目信息中的计划起止日期一致），确认后批量创建的任务将使用该周期。
+          下拉为「施工管理-项目信息」中的施工项目，可多次从报价清单批量追加进度任务；与已有任务在同一项目、同一工作表且施工内容完全相同的条目提交时会自动跳过、不重复创建。选择项目后按报价清单汇总生成任务候选；点击「加载候选」时在弹窗中确认计划周期（默认与项目信息一致），批量创建将使用该周期。
         </Text>
         <Space wrap size="middle" align="center">
           <Space size={8} align="center">
@@ -415,7 +428,7 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
       {rows.length > 0 && (
         <Card size="small" title="第二步：筛选、分配负责人并加入进度（每条任务必须选择负责人）" style={{ marginBottom: 16 }}>
           <Space wrap size="middle" align="center" style={{ marginBottom: 8 }}>
-            <Space size={8} align="center">
+            <Space size={8} align="center" wrap>
               <Text type="secondary">按 Sheet 筛选：</Text>
               <Select
                 allowClear
@@ -425,6 +438,20 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
                 options={sheetOptions}
                 onChange={(v) => setSheetFilter(v ?? null)}
               />
+              <Button
+                size="small"
+                disabled={filtered.length === 0 || selectedInFilteredCount === filtered.length}
+                onClick={() => setSelectedKeys(filtered.map((r) => r.key))}
+              >
+                全选当前范围（全部页）
+              </Button>
+              <Button
+                size="small"
+                disabled={selectedInFilteredCount === 0}
+                onClick={() => setSelectedKeys([])}
+              >
+                取消全选
+              </Button>
             </Space>
             <Space size={8} align="center">
               <Text type="secondary">负责人一键设置：</Text>
@@ -451,13 +478,16 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
                 应用到全部
               </Button>
             </Space>
-            <Text type="secondary">已选 {selectedKeys.length} / {filtered.length} 条</Text>
+            <Text type="secondary">
+              已选 {selectedInFilteredCount} / {filtered.length} 条
+              {sheetFilter ? '（仅提交当前 Sheet 筛选范围内已勾选的行）' : ''}
+            </Text>
             {bulkPlannedStart && bulkPlannedEnd ? (
               <Text type="secondary">
                 批量计划周期：{bulkPlannedStart} ~ {bulkPlannedEnd}
               </Text>
             ) : null}
-            <Button type="primary" disabled={selectedKeys.length === 0} onClick={addToProgressList}>
+            <Button type="primary" disabled={selectedInFilteredCount === 0} onClick={addToProgressList}>
               加入进度管理
             </Button>
           </Space>
@@ -489,7 +519,11 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
         columns={columns}
         pagination={{ pageSize: 10 }}
         size="middle"
-        rowSelection={{ selectedRowKeys: selectedKeys, onChange: (keys) => setSelectedKeys(keys) }}
+        rowSelection={{
+          selectedRowKeys: selectedKeys,
+          onChange: (keys) => setSelectedKeys(keys),
+          preserveSelectedRowKeys: true,
+        }}
       />
 
       <Modal
