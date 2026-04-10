@@ -976,7 +976,8 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       title: '截止时间',
       dataIndex: 'due_at',
       width: 208,
-      render: (v: string | null) => <DueCountdownCell dueAt={v} now={listNow} />,
+      render: (v: string | null, r: MinorWorkOrder) =>
+        r.status === 'closed' ? (v?.trim() || '—') : <DueCountdownCell dueAt={v} now={listNow} />,
     },
     {
       title: '工程金额',
@@ -1027,6 +1028,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       fixed: 'right',
       render: (_, r) => (
         <Space size={[4, 4]} wrap>
+          <a onClick={() => openDetail(r)}>办理</a>
           {canEditMinorWorkBasicInfo(r) ? (
             <a
               onClick={() => {
@@ -1038,7 +1040,6 @@ const MaintenanceMinorWorkPage: React.FC = () => {
               编辑
             </a>
           ) : null}
-          <a onClick={() => openDetail(r)}>办理</a>
           {canSubmitMinorWorkDingTalk(r.audit) ? (
             <a
               onClick={() => void submitMinorWorkDingTalk(r.id)}

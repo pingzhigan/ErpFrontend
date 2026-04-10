@@ -847,7 +847,8 @@ const MaintenanceSchedulePage: React.FC = () => {
       title: '截止时间',
       dataIndex: 'due_at',
       width: 208,
-      render: (v: string) => <DueCountdownCell dueAt={v} now={listNow} />,
+      render: (v: string, r: MaintenanceTask) =>
+        r.status === 'completed' ? (v?.trim() || '—') : <DueCountdownCell dueAt={v} now={listNow} />,
     },
     {
       title: '进度',
@@ -886,6 +887,7 @@ const MaintenanceSchedulePage: React.FC = () => {
       fixed: 'right',
       render: (_, r) => (
         <Space size={[4, 4]} wrap>
+          <a onClick={() => openDetail(r)}>办理</a>
           {canEditMtBasicInfo(r) ? (
             <a
               onClick={() => {
@@ -897,7 +899,6 @@ const MaintenanceSchedulePage: React.FC = () => {
               编辑
             </a>
           ) : null}
-          <a onClick={() => openDetail(r)}>办理</a>
           {mtDingSubmitAllowed(r.audit, r) ? (
             <a
               onClick={() => void submitMtDingTalk(r.id)}
