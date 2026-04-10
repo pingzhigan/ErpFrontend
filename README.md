@@ -1,116 +1,53 @@
-# React + TypeScript + Vite
+# 弱电管理后台 · 前端
 
-本仓库为弱电管理后台前端，基于 React + TypeScript + Vite 构建。以下为前端页面与入口的自述说明。
+React 19 + TypeScript + **Vite 7** + **Ant Design 5** + **ProComponents**。通过 `axios` 调用后端 REST，菜单与接口权限键与后端 `permissions` 对齐。
 
-## 前端页面与入口说明
+## 快速开始
 
-### 页面（pages/）
-
-| 文件 | 功能名称 | 说明概要 |
-|------|----------|----------|
-| Login.tsx | 登录页 | 账号密码登录、AuthContext 认证、登录后回跳 |
-| Dashboard.tsx | 仪表盘 | 统计与经营汇总、最近操作日志 |
-| Knowledge.tsx | 知识库管理 | 知识条目与附件、类型/系统筛选、Markdown 预览 |
-| InventoryStockIn.tsx | 库存入库 | 手动/自然语言入库、必填校验、SKU 冲突处理 |
-| InventoryStockOut.tsx | 库存出库 | 手动/自然语言出库、与库存匹配、数量校验 |
-| InventoryQuery.tsx | 库存查询 | 多条件查询、分页、单条编辑与删除 |
-| InventoryMaintain.tsx | 库存维护 | 文档解析导入、冲突确认、批量写入库存 |
-| Projects.tsx | 项目列表 | 项目汇总、回款抽屉、软删除 |
-| Opportunities.tsx | 机会管理列表 | 机会 CRUD、阶段筛选、AI 对话创建/更新 |
-| OpportunityDetail.tsx | 机会详情 | 详情展示、附件与跟进、AI 优化 |
-| Products.tsx | 商品清单 | 按项目/全局商品、分组排序、CRUD |
-| ConfigOrders.tsx | 配单管理 | 配单主从表、明细编辑与汇总、导出与历史 |
-| AutoConfig.tsx | 智能配单 | 文件上传、规则/向量解析、表头映射、保存为配单或商品 |
-| ProjectProductList.tsx | 项目商品与成本 | 项目维度的商品/成本/附件/回款聚合 |
-| CostList.tsx | 成本清单 | 成本明细 CRUD、按项目筛选与删除 |
-| Rules.tsx | 规则管理 | 规则 CRUD、条件与动作配置、AI 辅助 |
-| RuleConfig.tsx | 规则配置 | 键值配置、种子导入、详情查看与删除 |
-| Formulas.tsx | 公式管理 | 公式 CRUD、系统/启用筛选、AI 辅助 |
-| EquipmentSpecs.tsx | 设备规格管理 | 设备规格 CRUD、分类与系统筛选 |
-| IndustryFactors.tsx | 行业系数管理 | 行业系数 CRUD、乘数/加数配置 |
-| TierFactors.tsx | 档次系数管理 | 档次系数 CRUD、乘数/加数配置 |
-| UserManagement.tsx | 用户与权限管理 | 用户与权限组、角色与权限控制 |
-| Logs.tsx | 操作日志 | 分页日志、按动作/用户/时间筛选 |
-| DocTasks.tsx | 文档任务 | 文档上传解析、审阅入库、冲突与历史 |
-
-### 入口与上下文
-
-| 文件 | 功能名称 | 说明概要 |
-|------|----------|----------|
-| App.tsx | 应用根组件与路由 | ProLayout、权限菜单、路由与页面挂载 |
-| main.tsx | 前端入口 | 挂载根节点、Electron baseURL/MAC 初始化 |
-| auth/AuthContext.tsx | 认证上下文 | 登录态、token、roles/permissions、权限方法 |
-
----
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd frontend && npm install
+npm run dev        # http://localhost:5123 ，/api 代理到 localhost:4000
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+- 浏览器直连后端时：在 `.env` 中配置 `VITE_BACKEND_URL`（如 `http://localhost:4000`），见 `main.tsx`。
+- **Electron 桌面**：`npm run electron:dev`（先起 Vite，再等 `5123` 起 Electron）；`electron:build` 产出 Windows 安装包。桌面环境由 `electronAPI` 注入后端地址与可选 `client_mac`。
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## 功能结构（与路由一致）
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+| 区域 | 路径前缀 | 说明 |
+|------|----------|------|
+| 认证 | `/login`、`/forgot-password`、`/complete-email` | `AuthContext`：账号/钉钉登录、邮箱 OTP、JWT、`hasPermission` / `hasRole` |
+| 仪表盘 | `/dashboard` | 汇总与日志摘要 |
+| 项目管理 | `/projects`、`/project-analysis`、`/docs`、`/docs-excel-format`、`/project-products` | 列表/分析/文档解析/项目维度商品与回款等 |
+| 机会 | `/opportunities`、`/opportunities/detail/:id` | 列表与详情；`/opportunity-todos` 待办（侧栏可按权限隐藏） |
+| 施工 | `/construction/*` | 项目信息、进度（含批量创建）、质量/安全、施工日志、详情页 |
+| 维护 | `/maintenance/*` | 零星工程、维保排单 |
+| 商品与成本 | `/products`、`/cost-list`、`/config-orders` | 报价清单、成本、配单 |
+| 库存 | `/inventory`、`/inventory-maintain`、入出库及明细 | `inventory` / `inventory-maintain` 分权 |
+| AI / 规则 | `/auto-config`、`/rules`、`/rules/formulas`、`/knowledge` | 智能配单检查、**Excel 表头映射规则**、公式引擎、知识库 |
+| 系统 | `/users`、`/users/dingtalk`、`/logs`、`/staff-handover` | 用户与钉钉集成、日志；交接需 `admin` 或 `company_management` |
+| 工作台 | 顶栏提醒、`/api/workbench/push-stream`（SSE）、`/workbench/messages` | 推送与历史 |
+
+布局与权限：`src/App.tsx` 中 `appRoutes` + `filterMenuByPermission`；受保护路由用 `RequireAuth`（`permissions` 或 `roles`）。管理员可在设置里改 LLM 提供商与 Embedding（对接后端 `/api/llm-provider`、`/api/settings/embedding`）。
+
+版本与更新说明：`src/systemRelease.ts`（`APP_VERSION`、`SYSTEM_RELEASE_NOTES`）。
+
+## 工程说明
+
+- **按需加载**：业务页在 `src/lazyPages.ts` 中 `lazy()`，减轻首包。
+- **权限树编辑**：`src/config/rolePermissionTree.tsx`；高危写操作二次确认：`src/hooks/useReauthModal.tsx`（`reauth_password`）。
+- **钉钉**：`src/dingtalk/dingtalkClient.ts`；开发环境内置浏览器 CSP 在 `vite.config.ts` 中放宽，便于 HMR。
+- **后端 API 索引**：[../backend/api-reference.md](../backend/api-reference.md)。
+- **未挂路由的页面**：`pages/Rules.tsx`（业务规则）、`RuleConfig.tsx`、`IndustryFactors.tsx`、`TierFactors.tsx`、`EquipmentSpecs.tsx` 等当前未在 `App.tsx` 注册；侧栏「规则引擎」对应的是 `ExcelParseRules.tsx`（表头映射）。若要用上述页面，需在 `lazyPages.ts` 与 `App.tsx` 中补路由。
+
+## npm 脚本
+
+| 命令 | 用途 |
+|------|------|
+| `npm run dev` | Vite 开发服（端口 5123） |
+| `npm run build` | `tsc -b` + 静态资源构建 |
+| `npm run preview` | 预览构建结果 |
+| `npm run lint` | ESLint |
+| `npm run electron:dev` / `electron:build` | 桌面端开发与打包 |
+
+ESLint、React Compiler 等可按需在 `eslint.config.js` 与 [Vite](https://vite.dev/) 文档中扩展。
