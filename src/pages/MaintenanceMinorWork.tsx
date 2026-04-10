@@ -44,12 +44,14 @@ import dayjs, { type Dayjs } from 'dayjs'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { DueCountdownCell, useNowEverySecond } from '../components/DueCountdownCell'
+import { auditGateAllowsEditWhenNotApproving } from '../utils/auditGateUi'
 import {
   assigneeLabelMap,
   buildConstructionAssigneeOptions,
   type AssigneeInactiveRef,
   type AssigneeUserRow,
 } from '../utils/constructionAssigneeOptions'
+import { parseDueAtHourPickerValue } from '../utils/dueAtHourPickerParse'
 
 const { Title, Text, Paragraph } = Typography
 const { Search } = Input
@@ -74,13 +76,11 @@ function minorWorkAuditLabel(audit: GateAudit | undefined): { text: string; colo
 }
 
 function canEditMinorWorkWithAudit(audit: GateAudit | undefined): boolean {
-  if (!audit?.dingtalk_gate) return true
-  return audit.audit_status !== 'approving'
+  return auditGateAllowsEditWhenNotApproving(audit)
 }
 
 function canDeleteMinorWorkWithAudit(audit: GateAudit | undefined): boolean {
-  if (!audit?.dingtalk_gate) return true
-  return audit.audit_status !== 'approving'
+  return auditGateAllowsEditWhenNotApproving(audit)
 }
 
 function canSubmitMinorWorkDingTalk(audit: GateAudit | undefined): boolean {
@@ -155,6 +155,11 @@ type MinorWorkOrder = {
   updated_at: string
   created_by: string | null
   audit?: GateAudit
+}
+
+/** 与后端一致：任意状态可改基本信息；钉钉门禁下审批中不可编辑 */
+function canEditMinorWorkBasicInfo(r: MinorWorkOrder): boolean {
+  return canEditMinorWorkWithAudit(r.audit)
 }
 
 function minorWorkHasHandler(order: MinorWorkOrder | null | undefined): boolean {
@@ -347,6 +352,13 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   const [createForm] = Form.useForm()
   /** 与 Form 解耦：onChange 时表单可能已是新日期，用 ref 判断是否真的「换日」。 */
   const dueAtLastDayKeyRef = useRef<string | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  const [editRecord, setEditRecord] = useState<MinorWorkOrder | null>(null)
+  const [editForm] = Form.useForm()
+  const editDueAtLastDayKeyRef = useRef<string | null>(null)
+  /** Modal + destroyOnClose 下子 Form 晚于父 effect 挂载，用 ref 在 afterOpenChange 再 setFieldsValue */
+  const editRecordRef = useRef<MinorWorkOrder | null>(null)
+  const [editSubmitting, setEditSubmitting] = useState(false)
   const listNow = useNowEverySecond()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [detailId, setDetailId] = useState<number | null>(null)
@@ -443,6 +455,21 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     }
   }, [createOpen, createForm])
 
+  const fillEditFormFromRecord = useCallback(
+    (rec: MinorWorkOrder) => {
+      const d = parseDueAtHourPickerValue(rec.due_at)
+      editForm.setFieldsValue({
+        title: rec.title,
+        customer_name: rec.customer_name ?? '',
+        due_at: d,
+        project_amount: rec.project_amount ?? undefined,
+        cost_budget: rec.cost_budget ?? undefined,
+      })
+      editDueAtLastDayKeyRef.current = d ? d.format('YYYY-MM-DD') : null
+    },
+    [editForm],
+  )
+
   const loadDetail = useCallback(
     async (id: number) => {
       setDetailLoading(true)
@@ -528,6 +555,42 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     } catch (e: unknown) {
       if ((e as { errorFields?: unknown })?.errorFields) return
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '创建失败')
+    }
+  }
+
+  const handleEditBasicSave = async () => {
+    if (!editRecord) return
+    try {
+      const v = await editForm.validateFields()
+      const due = v.due_at ? dayjs(v.due_at).startOf('hour') : null
+      if (!due) {
+        msg.error('请选择截止时间')
+        return
+      }
+      setEditSubmitting(true)
+      const res = await axios.put<MinorWorkOrder & { audit?: GateAudit }>(`/api/minor-works/${editRecord.id}`, {
+        title: v.title,
+        customer_name: (v.customer_name ?? '').trim() || null,
+        due_at: due.format('YYYY-MM-DD HH:00'),
+        project_amount: v.project_amount ?? null,
+        cost_budget: v.cost_budget ?? null,
+        content: editRecord.content,
+        precautions: editRecord.precautions ?? undefined,
+      })
+      msg.success('已保存')
+      const savedId = editRecord.id
+      setEditOpen(false)
+      setEditRecord(null)
+      editForm.resetFields()
+      fetchList()
+      if (drawerOpen && detailId === savedId && res.data) {
+        setOrder({ ...res.data, audit: res.data.audit })
+      }
+    } catch (e: unknown) {
+      if ((e as { errorFields?: unknown })?.errorFields) return
+      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存失败')
+    } finally {
+      setEditSubmitting(false)
     }
   }
 
@@ -960,10 +1023,21 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     },
     {
       title: '操作',
-      width: 180,
+      width: 168,
       fixed: 'right',
       render: (_, r) => (
-        <Space size="small" wrap>
+        <Space size={[4, 4]} wrap>
+          {canEditMinorWorkBasicInfo(r) ? (
+            <a
+              onClick={() => {
+                editRecordRef.current = r
+                setEditRecord(r)
+                setEditOpen(true)
+              }}
+            >
+              编辑
+            </a>
+          ) : null}
           <a onClick={() => openDetail(r)}>办理</a>
           {canSubmitMinorWorkDingTalk(r.audit) ? (
             <a
@@ -1025,8 +1099,96 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         loading={loading}
         pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }}
         size="middle"
-        scroll={{ x: 1370 }}
+        scroll={{ x: 1360 }}
       />
+
+      <Modal
+        title="编辑基本信息"
+        open={editOpen}
+        onCancel={() => {
+          setEditOpen(false)
+          setEditRecord(null)
+          editRecordRef.current = null
+          editForm.resetFields()
+        }}
+        afterOpenChange={(opened) => {
+          if (!opened) return
+          const rec = editRecordRef.current
+          if (rec) {
+            // 再等一帧，确保 destroyOnClose 后 Form 已挂到 Modal 内
+            requestAnimationFrame(() => {
+              fillEditFormFromRecord(rec)
+            })
+          }
+        }}
+        onOk={() => void handleEditBasicSave()}
+        confirmLoading={editSubmitting}
+        destroyOnClose
+        width={560}
+        okText="保存"
+      >
+        <Form
+          key={editRecord ? `edit-${editRecord.id}` : 'edit-closed'}
+          form={editForm}
+          layout="vertical"
+          preserve={false}
+        >
+          <Form.Item name="title" label="事项标题" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input placeholder="简要概括" />
+          </Form.Item>
+          <Form.Item name="customer_name" label="客户名称">
+            <Input placeholder="选填" allowClear />
+          </Form.Item>
+          <Form.Item
+            name="due_at"
+            label="截止时间"
+            rules={[{ required: true, message: '请选择截止时间（精确到小时）' }]}
+            extra="不可选今天之前的日期；选今天时不可选当前时刻之前的整点。"
+          >
+            <DatePicker
+              disabledDate={dueAtDisabledDate}
+              disabledTime={dueAtDisabledTime}
+              defaultPickerValue={dayjs().hour(18).minute(0).second(0)}
+              showTime={{
+                format: 'HH',
+                showSecond: false,
+                disabledMinutes: () => Array.from({ length: 59 }, (_, i) => i + 1),
+                disabledSeconds: () => Array.from({ length: 59 }, (_, i) => i + 1),
+              }}
+              format="YYYY-MM-DD HH:00"
+              style={{ width: '100%' }}
+              onChange={(d) => {
+                if (!d) {
+                  editForm.setFieldValue('due_at', null)
+                  editDueAtLastDayKeyRef.current = null
+                  return
+                }
+                const dayKey = d.format('YYYY-MM-DD')
+                const sameCalendarDay = editDueAtLastDayKeyRef.current === dayKey
+                editDueAtLastDayKeyRef.current = dayKey
+                const next = sameCalendarDay
+                  ? d.startOf('hour')
+                  : d.startOf('day').hour(18).minute(0).second(0).millisecond(0)
+                editForm.setFieldValue('due_at', next)
+              }}
+            />
+          </Form.Item>
+          <Form.Item
+            name="project_amount"
+            label="工程金额"
+            rules={[{ required: true, message: '请填写工程金额' }]}
+          >
+            <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="元" addonAfter="元" />
+          </Form.Item>
+          <Form.Item
+            name="cost_budget"
+            label="成本预算"
+            rules={[{ required: true, message: '请填写成本预算' }]}
+          >
+            <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="元" addonAfter="元" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         title="新建零星工程"

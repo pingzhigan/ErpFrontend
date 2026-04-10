@@ -203,25 +203,43 @@ const ConstructionLogPage: React.FC = () => {
     }
   }, [headers, msg])
 
-  const fetchProgressTasks = useCallback(async () => {
-    try {
-      const res = await axios.get<{ list: any[] }>('/api/construction/tasks', { headers })
-      const list = (res.data?.list ?? []).map((r: any) => ({
-        id: Number(r.id),
-        content: String(r.content ?? r.taskName ?? ''),
-        project: String(r.project ?? r.project_name ?? ''),
-        sheetName: r.sheet_name != null ? String(r.sheet_name) : r.sheetName != null ? String(r.sheetName) : null,
-        responsible: String(r.responsible ?? ''),
-        requiredQty: Number(r.requiredQty ?? r.required_qty) || 0,
-        doneQty: Number(r.doneQty ?? r.done_qty) || 0,
-        plannedEnd: String(r.plannedEnd ?? r.planned_end ?? ''),
-        status: String(r.status ?? ''),
-      }))
-      setProgressTasksForPicker(list)
-    } catch {
-      setProgressTasksForPicker([])
-    }
-  }, [headers])
+  /** 后端列表默认每页仅 10 条，须分页拉全；可选按项目过滤（与日志所选项目一致） */
+  const fetchProgressTasks = useCallback(
+    async (filterProjectName?: string) => {
+      try {
+        const pageSize = 100
+        let page = 1
+        let total = 0
+        const acc: any[] = []
+        for (;;) {
+          const params: Record<string, string | number> = { page, pageSize }
+          const pn = (filterProjectName ?? '').trim()
+          if (pn) params.project_name = pn
+          const res = await axios.get<{ list: any[]; total?: number }>('/api/construction/tasks', { params, headers })
+          const chunk = res.data?.list ?? []
+          total = typeof res.data?.total === 'number' ? res.data.total : total
+          acc.push(...chunk)
+          if (acc.length >= total || chunk.length === 0) break
+          page += 1
+        }
+        const list = acc.map((r: any) => ({
+          id: Number(r.id),
+          content: String(r.content ?? r.taskName ?? ''),
+          project: String(r.project ?? r.project_name ?? ''),
+          sheetName: r.sheet_name != null ? String(r.sheet_name) : r.sheetName != null ? String(r.sheetName) : null,
+          responsible: String(r.responsible ?? ''),
+          requiredQty: Number(r.requiredQty ?? r.required_qty) || 0,
+          doneQty: Number(r.doneQty ?? r.done_qty) || 0,
+          plannedEnd: String(r.plannedEnd ?? r.planned_end ?? ''),
+          status: String(r.status ?? ''),
+        }))
+        setProgressTasksForPicker(list)
+      } catch {
+        setProgressTasksForPicker([])
+      }
+    },
+    [headers],
+  )
 
   useEffect(() => {
     fetchLogs()
@@ -432,8 +450,10 @@ const ConstructionLogPage: React.FC = () => {
   const [taskPickSheetFilter, setTaskPickSheetFilter] = useState<string | null>(null)
 
   useEffect(() => {
-    if (taskPickOpen) fetchProgressTasks()
-  }, [taskPickOpen, fetchProgressTasks])
+    if (!taskPickOpen) return
+    const pn = String(form.getFieldValue('project') ?? '').trim()
+    void fetchProgressTasks(pn || undefined)
+  }, [taskPickOpen, fetchProgressTasks, form])
   const allProgressTasks = progressTasksForPicker
   const tasksForPicker = useMemo(() => {
     let list = allProgressTasks
@@ -789,6 +809,9 @@ const ConstructionLogPage: React.FC = () => {
             <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
               先选择今日完成的进度任务及数量（可按项目、Sheet 筛选；默认不选），预览确认后内容会填入下方 AI 输入框，再一并解析。
             </Text>
+            <Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
+              注意：此处列表来自「进度管理」中已创建的施工任务，不是报价清单行数；未在进度里创建的任务不会出现。打开弹窗时会按当前项目名称拉取该项目下全部任务。
+            </Text>
             <Button type="primary" ghost onClick={openTaskPicker}>选择进度任务</Button>
           </Card>
 
@@ -931,12 +954,13 @@ const ConstructionLogPage: React.FC = () => {
                 />
               </Space>
               <Text type="secondary">已选 {pickedKeys.length} 条</Text>
+              <Text type="secondary">共加载 {allProgressTasks.length} 条进度任务</Text>
             </Space>
             <Table
               size="small"
               rowKey="id"
               dataSource={tasksForPicker}
-              pagination={{ pageSize: 8 }}
+              pagination={{ pageSize: 12, showTotal: (t) => `共 ${t} 条` }}
               rowSelection={{ selectedRowKeys: pickedKeys, onChange: (keys) => setPickedKeys(keys) }}
               columns={[
                 { title: '施工内容', dataIndex: 'content', ellipsis: true },

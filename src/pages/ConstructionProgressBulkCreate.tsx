@@ -1,23 +1,40 @@
 /**
  * 功能名称：进度管理批量创建
- * 实现原理与逻辑：从报价清单中批量创建进度任务，包括项目名称、负责人、计划周期、数量、进度、状态等。支持按项目名称、负责人、计划周期、数量、进度、状态等筛选。支持按日期排序。支持导出为 Excel 文件。
+ * 实现原理与逻辑：从报价清单批量创建进度任务；加载候选前弹窗确认计划周期，默认取项目信息中的计划起止日期；提交批量创建时使用该周期。
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { App, Button, Card, Modal, Select, Space, Table, Tag, Typography } from 'antd'
+import { App, Button, Card, DatePicker, Form, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import axios from 'axios'
+import dayjs, { type Dayjs } from 'dayjs'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { buildConstructionAssigneeOptions, type AssigneeUserRow } from '../utils/constructionAssigneeOptions'
 
-const { Title, Text } = Typography
+const { Title, Text, Paragraph } = Typography
 
 type ProductRow = {
   goods_name?: unknown
   quantity?: unknown
   sheet_name?: unknown
   project_name?: unknown
+}
+
+type ConstructionProjectListRow = {
+  project_name: string
+  startDate?: string
+  endDate?: string
+}
+
+/** 解析项目信息中的计划日期（兼容 YYYY-MM-DD、ISO、带时间戳等） */
+function parseProjectDate(s: string | undefined | null): Dayjs | null {
+  const t = (s ?? '').trim()
+  if (!t) return null
+  const ymd = dayjs(t.slice(0, 10), 'YYYY-MM-DD', true)
+  if (ymd.isValid()) return ymd
+  const loose = dayjs(t)
+  return loose.isValid() ? loose.startOf('day') : null
 }
 
 const ConstructionProgressBulkCreatePage: React.FC = () => {
@@ -27,13 +44,23 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
   const headers = useMemo(() => (user?.token ? { Authorization: `Bearer ${user.token}` } : {}), [user?.token])
 
   const [projectName, setProjectName] = useState('')
+  /** 弹窗确认后、批量创建任务时使用的计划起止（YYYY-MM-DD） */
+  const [bulkPlannedStart, setBulkPlannedStart] = useState('')
+  const [bulkPlannedEnd, setBulkPlannedEnd] = useState('')
   const [loading, setLoading] = useState(false)
   const [rows, setRows] = useState<{ key: string; goods_name: string; sheet_name: string | null; required_qty: number; responsible: string }[]>([])
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
   const [sheetFilter, setSheetFilter] = useState<string | null>(null)
   const [defaultResponsible, setDefaultResponsible] = useState('')
   const [projectOptions, setProjectOptions] = useState<string[]>([])
+  const [projectSummaries, setProjectSummaries] = useState<ConstructionProjectListRow[]>([])
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
+  const [loadConfirmOpen, setLoadConfirmOpen] = useState(false)
+  const [loadConfirmForm] = Form.useForm<{ planned_start: Dayjs; planned_end: Dayjs }>()
+  /** 最近一次从报价拉取：原始行数 vs 合并后候选数（便于对照报价清单条数） */
+  const [quoteLoadStats, setQuoteLoadStats] = useState<{ rows: number; merged: number; skippedEmptyName: number } | null>(
+    null,
+  )
   const [skippedModalOpen, setSkippedModalOpen] = useState(false)
   const [skippedResult, setSkippedResult] = useState<{ created: number; skippedItems: { content: string; sheet_name: string | null }[] } | null>(null)
   const [managerUsers, setManagerUsers] = useState<AssigneeUserRow[]>([])
@@ -58,15 +85,48 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
     try {
       setProjectOptionsLoading(true)
       const params = new URLSearchParams()
+      /** 批量创建进度任务页：仅展示尚未有任何进度任务（未删除）的施工项目 */
+      params.set('without_progress_tasks', '1')
       if (keyword != null && keyword.trim()) params.set('keyword', keyword.trim())
-      const res = await axios.get<{ list: { project_name: string }[]; total: number }>(
+      const res = await axios.get<{ list: ConstructionProjectListRow[]; total: number }>(
         `/api/construction/projects?${params.toString()}`,
         { headers },
       )
-      const list = (res.data?.list ?? []).map((r) => r.project_name).filter(Boolean)
-      setProjectOptions(list)
+      const raw = res.data?.list ?? []
+      const summaries: ConstructionProjectListRow[] = raw
+        .map((r) => {
+          const rec = r as ConstructionProjectListRow & { start_date?: string; end_date?: string }
+          return {
+            project_name: (rec.project_name ?? '').trim(),
+            startDate: rec.startDate ?? rec.start_date ?? '',
+            endDate: rec.endDate ?? rec.end_date ?? '',
+          }
+        })
+        .filter((r) => r.project_name)
+      const names = summaries.map((r) => r.project_name)
+      const nameSet = new Set(names)
+      setProjectSummaries(summaries)
+      setProjectOptions(names)
+      let clearedProject = false
+      setProjectName((prev) => {
+        const t = prev.trim()
+        if (t && !nameSet.has(t)) {
+          clearedProject = true
+          return ''
+        }
+        return prev
+      })
+      if (clearedProject) {
+        setRows([])
+        setSelectedKeys([])
+        setSheetFilter(null)
+        setBulkPlannedStart('')
+        setBulkPlannedEnd('')
+        setQuoteLoadStats(null)
+      }
     } catch {
       setProjectOptions([])
+      setProjectSummaries([])
     } finally {
       setProjectOptionsLoading(false)
     }
@@ -111,12 +171,53 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
     )
   }
 
-  const loadFromProducts = async () => {
+  /** 将当前选中项目在「项目信息」中的计划起止写入表单（须在弹窗内容挂载后调用，见 Modal afterOpenChange） */
+  const applyProjectPlannedRangeToLoadForm = useCallback(() => {
+    const proj = projectName.trim()
+    if (!proj) return
+    const row = projectSummaries.find((p) => p.project_name === proj)
+    const startD = parseProjectDate(row?.startDate) ?? dayjs()
+    let endD = parseProjectDate(row?.endDate) ?? startD
+    if (endD.isBefore(startD, 'day')) {
+      endD = startD
+    }
+    loadConfirmForm.resetFields()
+    loadConfirmForm.setFieldsValue({
+      planned_start: startD,
+      planned_end: endD,
+    })
+  }, [projectName, projectSummaries, loadConfirmForm])
+
+  const openLoadConfirmModal = () => {
     const proj = projectName.trim()
     if (!proj) {
       msg.warning('请先选择项目名称')
       return
     }
+    setLoadConfirmOpen(true)
+  }
+
+  const executeLoadFromProducts = async (): Promise<void> => {
+    const proj = projectName.trim()
+    if (!proj) {
+      msg.warning('请先选择项目名称')
+      return Promise.reject(new Error('no project'))
+    }
+    let v: { planned_start: Dayjs; planned_end: Dayjs }
+    try {
+      v = await loadConfirmForm.validateFields()
+    } catch {
+      return Promise.reject(new Error('validate'))
+    }
+    const ps = v.planned_start.format('YYYY-MM-DD')
+    const pe = v.planned_end.format('YYYY-MM-DD')
+    if (pe < ps) {
+      msg.warning('计划结束日期不能早于开始日期')
+      return Promise.reject(new Error('range'))
+    }
+    setBulkPlannedStart(ps)
+    setBulkPlannedEnd(pe)
+    setLoadConfirmOpen(false)
     setLoading(true)
     setRows([])
     setSelectedKeys([])
@@ -139,9 +240,13 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
       }
 
       const grouped = new Map<string, { goods_name: string; sheet_name: string | null; required_qty: number }>()
+      let skippedEmptyName = 0
       for (const r of list) {
         const name = r.goods_name != null ? String(r.goods_name).trim() : ''
-        if (!name) continue
+        if (!name) {
+          skippedEmptyName += 1
+          continue
+        }
         const sn = r.sheet_name != null && String(r.sheet_name).trim() ? String(r.sheet_name).trim() : null
         const qty = r.quantity != null && r.quantity !== '' ? Number(r.quantity) : 0
         const q = Number.isFinite(qty) ? qty : 0
@@ -158,9 +263,10 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
         responsible: '',
       }))
       out.sort((a, b) => (a.sheet_name ?? '').localeCompare(b.sheet_name ?? '') || a.goods_name.localeCompare(b.goods_name))
+      setQuoteLoadStats({ rows: list.length, merged: out.length, skippedEmptyName })
       setRows(out)
       setSelectedKeys(out.map((x) => x.key))
-      msg.success(`已加载 ${out.length} 条任务候选`)
+      msg.success(`已加载 ${out.length} 条任务候选（计划周期 ${ps} ~ ${pe}）`)
     } catch (e: any) {
       msg.error(e?.response?.data?.message || '加载失败')
     } finally {
@@ -180,15 +286,31 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
       msg.warning('请至少选择一条')
       return
     }
-    const today = new Date().toISOString().slice(0, 10)
+    if (!bulkPlannedStart.trim() || !bulkPlannedEnd.trim()) {
+      msg.warning('请先点击「加载候选」，在弹出窗口中确认计划周期')
+      return
+    }
+    const ps = bulkPlannedStart.trim()
+    const pe = bulkPlannedEnd.trim()
+    if (pe < ps) {
+      msg.warning('计划结束日期不能早于开始日期，请重新加载候选并在弹窗中确认周期')
+      return
+    }
+    const missingResp = picked.filter((p) => !(p.responsible ?? '').trim())
+    if (missingResp.length > 0) {
+      msg.warning(
+        `有 ${missingResp.length} 条已选任务未选择负责人，请逐条选择或使用「负责人一键设置」后再加入进度管理`,
+      )
+      return
+    }
     const tasks = picked.map((p) => ({
       project_name: proj,
       task_name: (p.goods_name ?? '').slice(0, 50) || '任务',
       content: p.goods_name,
       sheet_name: p.sheet_name ?? null,
-      responsible: (p.responsible ?? '').trim() || null,
-      planned_start: today,
-      planned_end: today,
+      responsible: (p.responsible ?? '').trim(),
+      planned_start: ps,
+      planned_end: pe,
       required_qty: p.required_qty,
       done_qty: 0,
       status: 'not_started',
@@ -258,7 +380,7 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
 
       <Card size="small" title="第一步：选择项目并加载候选" style={{ marginBottom: 16 }}>
         <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-          从「施工管理-项目信息」中选择项目，根据该项目的报价清单按商品名称汇总生成任务候选。
+          下拉中仅显示<strong>尚未创建任何进度任务</strong>的施工项目（若项目下已有进度任务，请直接在进度管理中维护）。选择项目后，将根据该项目的报价清单按商品名称汇总生成任务候选。点击「加载候选」时将弹出窗口确认计划周期（默认与项目信息中的计划起止日期一致），确认后批量创建的任务将使用该周期。
         </Text>
         <Space wrap size="middle" align="center">
           <Space size={8} align="center">
@@ -271,19 +393,27 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
               loading={projectOptionsLoading}
               options={projectOptions.map((p) => ({ value: p, label: p }))}
               style={{ width: 280 }}
-              onChange={(v) => setProjectName((v ?? '') as string)}
+              onChange={(v) => {
+                setProjectName((v ?? '') as string)
+                setRows([])
+                setSelectedKeys([])
+                setSheetFilter(null)
+                setBulkPlannedStart('')
+                setBulkPlannedEnd('')
+                setQuoteLoadStats(null)
+              }}
               onSearch={(v) => fetchConstructionProjects(v)}
               filterOption={false}
             />
           </Space>
-          <Button type="primary" loading={loading} onClick={loadFromProducts}>
+          <Button type="primary" loading={loading} onClick={openLoadConfirmModal}>
             加载候选
           </Button>
         </Space>
       </Card>
 
       {rows.length > 0 && (
-        <Card size="small" title="第二步：筛选、分配负责人并加入进度" style={{ marginBottom: 16 }}>
+        <Card size="small" title="第二步：筛选、分配负责人并加入进度（每条任务必须选择负责人）" style={{ marginBottom: 16 }}>
           <Space wrap size="middle" align="center" style={{ marginBottom: 8 }}>
             <Space size={8} align="center">
               <Text type="secondary">按 Sheet 筛选：</Text>
@@ -322,6 +452,11 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
               </Button>
             </Space>
             <Text type="secondary">已选 {selectedKeys.length} / {filtered.length} 条</Text>
+            {bulkPlannedStart && bulkPlannedEnd ? (
+              <Text type="secondary">
+                批量计划周期：{bulkPlannedStart} ~ {bulkPlannedEnd}
+              </Text>
+            ) : null}
             <Button type="primary" disabled={selectedKeys.length === 0} onClick={addToProgressList}>
               加入进度管理
             </Button>
@@ -332,6 +467,18 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
       {rows.length > 0 && (
         <div style={{ marginBottom: 8 }}>
           <Text type="secondary">共 {rows.length} 条任务候选，勾选后点击「加入进度管理」。</Text>
+          {quoteLoadStats ? (
+            <Paragraph type="secondary" style={{ margin: '8px 0 0', fontSize: 13 }}>
+              说明：报价清单本次共读取 <Text strong>{quoteLoadStats.rows}</Text> 行；按「Sheet + 商品名称」合并为{' '}
+              <Text strong>{quoteLoadStats.merged}</Text> 条（同一 Sheet 下同名商品会合并需求数量，多条报价行对应一条进度任务）。
+              {quoteLoadStats.skippedEmptyName > 0 ? (
+                <>
+                  {' '}
+                  另有 <Text strong>{quoteLoadStats.skippedEmptyName}</Text> 行因商品名称为空已跳过。
+                </>
+              ) : null}
+            </Paragraph>
+          ) : null}
         </div>
       )}
 
@@ -346,7 +493,41 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
       />
 
       <Modal
-        title="部分任务未创建（与已有任务重复）"
+        title="确认计划周期后加载候选"
+        open={loadConfirmOpen}
+        okText="确认并加载"
+        cancelText="取消"
+        onCancel={() => setLoadConfirmOpen(false)}
+        onOk={() => executeLoadFromProducts()}
+        destroyOnClose
+        afterOpenChange={(open) => {
+          if (open) applyProjectPlannedRangeToLoadForm()
+        }}
+        width={440}
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          以下日期将应用于本次加载后批量创建的进度任务。默认已填入当前项目在「项目信息」中的计划周期，可按需修改。
+        </Text>
+        <Form form={loadConfirmForm} layout="vertical" preserve={false}>
+          <Form.Item
+            name="planned_start"
+            label="计划开始日期"
+            rules={[{ required: true, message: '请选择开始日期' }]}
+          >
+            <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+          </Form.Item>
+          <Form.Item
+            name="planned_end"
+            label="计划结束日期"
+            rules={[{ required: true, message: '请选择结束日期' }]}
+          >
+            <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="部分任务未创建（同项目同工作表下内容重复）"
         open={skippedModalOpen}
         onOk={handleSkippedModalOk}
         onCancel={handleSkippedModalOk}
@@ -358,7 +539,7 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
           <>
             <p style={{ marginBottom: 12 }}>
               已成功加入 <strong>{skippedResult.created}</strong> 条进度任务；以下{' '}
-              <strong>{skippedResult.skippedItems.length}</strong> 条因该项目下已存在相同施工内容而被跳过，未重复创建：
+              <strong>{skippedResult.skippedItems.length}</strong> 条因该项目<strong>同一工作表</strong>下已存在相同施工内容而被跳过，未重复创建：
             </p>
             <ul style={{ margin: 0, paddingLeft: 20, maxHeight: 280, overflowY: 'auto' }}>
               {skippedResult.skippedItems.map((item, idx) => (

@@ -42,6 +42,9 @@ import { useReauthModal } from '../hooks/useReauthModal'
 
 type SheetItem = { name: string; index: number; hasData: boolean }
 
+/** 智能格式化：每批最多解析的 Sheet 数；多批时从第 2 批起合并到已有结果 */
+const SHEETS_PER_PARSE = 5
+
 const { Title, Text } = Typography
 
 /** 行类型中文标签（与后端一致） */
@@ -545,12 +548,15 @@ const DocTasksExcelFormatPage: React.FC = () => {
   const [activePreviewTab, setActivePreviewTab] = useState<string>('')
   /** 映射区当前选中的 sheet */
   const [activeMappingTab, setActiveMappingTab] = useState<string>('')
-  /** 是否至少有一个 sheet 已确认映射（可入库） */
-  const [hasConfirmed, setHasConfirmed] = useState(false)
+  /** 是否至少有一个 sheet 已确认映射并生成预览（有 finalRows 才可入库） */
+  const hasConfirmed = useMemo(
+    () => Object.values(finalRowsBySheet).some((rows) => (rows?.length ?? 0) > 0),
+    [finalRowsBySheet],
+  )
   /** 关联项目名（批量填充与入库用） */
   const [projectName, setProjectName] = useState('')
-  /** 入库/下载范围：当前 Sheet 或 全部 Sheet 合并 */
-  const [saveScope, setSaveScope] = useState<'current' | 'all'>('current')
+  /** 入库/下载范围：选中的 Sheet（多选），各行保留 sheet_name；默认随解析结果同步为全部已解析 Sheet */
+  const [saveSheetNames, setSaveSheetNames] = useState<string[]>([])
   /** 覆盖确认弹窗 */
   const [overwriteModalOpen, setOverwriteModalOpen] = useState(false)
   const [overwriteProjectName, setOverwriteProjectName] = useState('')
@@ -579,10 +585,17 @@ const DocTasksExcelFormatPage: React.FC = () => {
   const [addedRuleHeaders, setAddedRuleHeaders] = useState<Set<string>>(new Set())
   /** 后端已有规则的表头（规范化），解析后有映射时拉取一次 */
   const [existingRuleHeaders, setExistingRuleHeaders] = useState<Set<string>>(new Set())
+  /** 在「已选 Sheet」升序下的解析游标：0 表示下一批从第 1 个开始，每批最多 5 个 */
+  const [sheetParseOffset, setSheetParseOffset] = useState(0)
+
   /** 数据清洗预览：上传后先返回待删行，用户按 Sheet / 按行确认后再继续 */
   const [filterPreviewState, setFilterPreviewState] = useState<{
     file: File
     sheetIndices: number[]
+    /** 本批清洗确认完成后写入的 sheetParseOffset（= 本批起始 offset + 本批 sheet 数） */
+    sheetParseOffsetAfterBatch: number
+    /** 是否与此前已解析的 Sheet 结果合并（非首批） */
+    mergeFilterResultsIntoExisting: boolean
     bySheet: {
       sheetIndex: number
       sheetName: string
@@ -607,6 +620,19 @@ const DocTasksExcelFormatPage: React.FC = () => {
 
   const token = user?.token
   const headers = useMemo(() => (token ? { Authorization: `Bearer ${token}` } : {}), [token])
+
+  /** 已选 Sheet 排序后的稳定键：变更时下一批从第 1 个 Sheet 重新计数 */
+  const selectedSheetIndicesKey = useMemo(
+    () =>
+      [...selectedSheetIndices]
+        .sort((a, b) => a - b)
+        .join(','),
+    [selectedSheetIndices],
+  )
+  useEffect(() => {
+    setSheetParseOffset(0)
+  }, [selectedSheetIndicesKey])
+
 
   /** 返回货物名称为空的行索引（用于二次过滤确认） */
   const getEmptyGoodsNameIndices = useCallback((rows: ReviewRow[]): number[] => {
@@ -738,9 +764,9 @@ const DocTasksExcelFormatPage: React.FC = () => {
         lastSheetFetchRef.current = fileId
         const sheets = res.data?.sheets ?? []
         setSheetList(sheets)
-        const withData = res.data?.sheetsWithData ?? sheets.filter((s) => s.hasData).map((s) => s.name)
-        const indicesWithData = sheets.map((s, i) => (withData.includes(s.name) ? i : -1)).filter((i) => i >= 0)
-        setSelectedSheetIndices(indicesWithData.length > 0 ? indicesWithData : [0])
+        /** 默认勾选全部工作表（保留各 Sheet 名称参与解析与入库），用户仍可取消部分 */
+        const allIndices = sheets.map((_, i) => i)
+        setSelectedSheetIndices(allIndices.length > 0 ? allIndices : [])
       })
       .catch((err: unknown) => {
         if (cancelled || !mountedRef.current) return
@@ -772,8 +798,24 @@ const DocTasksExcelFormatPage: React.FC = () => {
     fullParseResultsRef.current = []
     setActivePreviewTab('')
     setActiveMappingTab('')
-    setHasConfirmed(false)
+    setSheetParseOffset(0)
+    setSaveSheetNames([])
   }, [])
+
+  /** 下一批从已选 Sheet 的第 1 个重新计数，并清空已解析结果（同重新上传后的解析起点） */
+  const resetSheetParseBatch = useCallback(() => {
+    setSheetParseOffset(0)
+    setParseResults([])
+    setFinalRowsBySheet({})
+    setSaveSheetNames([])
+    fullParseResultsRef.current = []
+    setFilterPreviewState(null)
+    setParseLogLines([])
+    setParseProgress(null)
+    setActivePreviewTab('')
+    setActiveMappingTab('')
+    msg.info('已重置解析批次：下次点击解析将从勾选列表中第 1 个 Sheet 开始（每批最多 5 个）')
+  }, [msg])
 
   /** 将 File 转为 Antd UploadFile 并设置到 fileList（用于拖拽、粘贴、点击选择） */
   const setFileFromFile = useCallback((file: File) => {
@@ -1002,7 +1044,7 @@ const DocTasksExcelFormatPage: React.FC = () => {
     return JSON.parse(resultData)
   }
 
-  /** 上传并调用 parse-stream（多 sheet 时逐个解析，后台进度通过 SSE 同步到前端） */
+  /** 上传并调用 parse-stream（多 sheet 时按批解析，每批最多 5 个，后台进度通过 SSE 同步到前端） */
   const handleParse = () => {
     let file = fileList[0]?.originFileObj as File | undefined
     if (!file && fileList[0]?.name && lastSelectedFileRef.current?.name === fileList[0].name)
@@ -1011,29 +1053,46 @@ const DocTasksExcelFormatPage: React.FC = () => {
       msg.warning('请先选择 Excel 文件')
       return
     }
-    let indices = selectedSheetIndices.length > 0 ? selectedSheetIndices : [0]
-    const MAX_SHEETS = 5
-    if (indices.length > MAX_SHEETS) {
-      msg.warning(`最多同时解析 ${MAX_SHEETS} 个 Sheet，已取前 ${MAX_SHEETS} 个`)
-      indices = indices.slice(0, MAX_SHEETS)
+    const orderedIndices = (() => {
+      const uniq = [...new Set(selectedSheetIndices)].sort((a, b) => a - b)
+      return uniq.length > 0 ? uniq : [0]
+    })()
+    const start = sheetParseOffset
+    const indices = orderedIndices.slice(start, start + SHEETS_PER_PARSE)
+    if (indices.length === 0) {
+      msg.info(
+        `当前勾选范围内已全部解析完毕（共 ${orderedIndices.length} 个 Sheet）。若要重新从第 1 个 Sheet 起按批解析，请先点击「重置解析批次」。`,
+      )
+      return
     }
+    const isFirstBatch = start === 0
+    const mergeIntoExisting = !isFirstBatch
+    const nextOffsetAfterBatch = start + indices.length
+    const remainingAfterBatch = Math.max(0, orderedIndices.length - nextOffsetAfterBatch)
+
     setParseLoading(true)
-    setParseResults([])
-    setFinalRowsBySheet({})
-    setHasConfirmed(false)
-    setParseProgress(null)
-    setParseLogLines([])
-    setParseStreamingLine('')
-    parseStreamingRef.current = ''
-    fullParseResultsRef.current = []
+    if (isFirstBatch) {
+      setParseResults([])
+      setFinalRowsBySheet({})
+      setParseProgress(null)
+      setParseLogLines([])
+      setParseStreamingLine('')
+      parseStreamingRef.current = ''
+      fullParseResultsRef.current = []
+    } else {
+      setParseProgress(null)
+      setParseStreamingLine('')
+      parseStreamingRef.current = ''
+    }
     setFilterPreviewState(null)
 
     const run = async () => {
       const results: ParseResultItem[] = []
-      const bySheet: Record<string, ReviewRow[]> = {}
       const filterPreviews: { sheetIndex: number; sheetName: string; filterPreview: FilterPreview }[] = []
       try {
-        appendParseLog(`[${formatLogTime()}] 开始解析，共 ${indices.length} 个 Sheet`)
+        appendParseLog(
+          `[${formatLogTime()}] 本批解析工作簿索引：${indices.join(', ')}（已选共 ${orderedIndices.length} 个，顺位第 ${start + 1}–${start + indices.length} 个）${remainingAfterBatch > 0 ? `；尚有 ${remainingAfterBatch} 个未解析，可再次点击「解析」` : '；已无待解析 Sheet'}`,
+        )
         for (let i = 0; i < indices.length; i++) {
           if (!mountedRef.current) return
           setParseStreamingLine('')
@@ -1098,19 +1157,14 @@ const DocTasksExcelFormatPage: React.FC = () => {
           const item = res as ParseResultItem
           appendParseLog(`[${formatLogTime()}] Sheet「${item.sheetName}」解析完成 (${resAt - reqAt}ms)`)
           results.push(item)
-          bySheet[item.sheetName] = enrichPreviewRows(
-            (item.standardRows ?? []).map((r, idx) => ({
-              ...r,
-              _key: `${item.sheetName}-${Date.now()}-${idx}`,
-              sheet_name: item.sheetName,
-            })),
-          )
         }
         if (!mountedRef.current) return
         if (filterPreviews.length > 0) {
           setFilterPreviewState({
             file,
             sheetIndices: indices,
+            sheetParseOffsetAfterBatch: nextOffsetAfterBatch,
+            mergeFilterResultsIntoExisting: mergeIntoExisting,
             bySheet: filterPreviews.map((p) => ({
               ...p,
               confirmChoice: 'delete' as const,
@@ -1122,27 +1176,26 @@ const DocTasksExcelFormatPage: React.FC = () => {
           msg.info('请确认数据清洗结果：确认删除并继续，或保留全部行再继续')
           return
         }
-        fullParseResultsRef.current = results
         const resultsForState = results.map((r) => ({ ...r, dataRows: [] as string[][] }))
-        setParseResults(resultsForState)
-        setFinalRowsBySheet(bySheet)
-        setTimeout(() => {
-          const first = findFirstUnitPriceConflict(bySheet)
-          if (first) setUnitPriceConflict(first)
-        }, 0)
-        const pendingEmpty: { sheetName: string; fullRows: ReviewRow[]; indicesToRemove: number[] }[] = []
-        for (const [sn, rws] of Object.entries(bySheet)) {
-          const indices = getEmptyGoodsNameIndices(rws)
-          if (indices.length > 0) pendingEmpty.push({ sheetName: sn, fullRows: rws, indicesToRemove: indices })
+        if (mergeIntoExisting) {
+          fullParseResultsRef.current = [...fullParseResultsRef.current, ...results]
+          setParseResults((prev) => [...prev, ...resultsForState])
+        } else {
+          fullParseResultsRef.current = results
+          setParseResults(resultsForState)
         }
-        if (pendingEmpty.length > 0) setEmptyGoodsNameConfirm({ bySheet: pendingEmpty })
+        setSheetParseOffset(nextOffsetAfterBatch)
         setParseProgress(null)
-        appendParseLog(`[${formatLogTime()}] 全部完成，共 ${results.length} 个 Sheet`)
+        appendParseLog(`[${formatLogTime()}] 本批完成，共 ${results.length} 个 Sheet`)
         if (results.length > 0) {
           setActivePreviewTab(results[0].sheetName)
           setActiveMappingTab(results[0].sheetName)
         }
-        msg.success(`已解析 ${results.length} 个 Sheet，请按 Tab 核对映射与预览`)
+        msg.success(
+          remainingAfterBatch > 0
+            ? `本批已解析 ${results.length} 个 Sheet，请在步骤 2 确认各 Sheet 映射后生成预览。尚有 ${remainingAfterBatch} 个 Sheet 未解析，可再次点击「解析」。`
+            : `本批已解析 ${results.length} 个 Sheet，已全部解析完毕；请在步骤 2 确认映射后在步骤 3 查看预览。`,
+        )
       } catch (e: unknown) {
         if (!mountedRef.current) return
         const err = e as Error
@@ -1162,7 +1215,7 @@ const DocTasksExcelFormatPage: React.FC = () => {
     async () => {
       const state = filterPreviewState
       if (!state) return
-      const { file, bySheet } = state
+      const { file, bySheet, mergeFilterResultsIntoExisting, sheetParseOffsetAfterBatch } = state
       const hasUnset = bySheet.some((s) => s.confirmChoice === null)
       if (hasUnset) {
         msg.warning('请为每个 Sheet 选择「本 Sheet 确认删除」或「本 Sheet 保留全部」后再继续')
@@ -1170,11 +1223,12 @@ const DocTasksExcelFormatPage: React.FC = () => {
       }
       setFilterPreviewState(null)
       setParseLoading(true)
-      setParseResults([])
-      setFinalRowsBySheet({})
+      if (!mergeFilterResultsIntoExisting) {
+        setParseResults([])
+        setFinalRowsBySheet({})
+      }
       setParseLogLines((prev) => [...prev, `[${formatLogTime()}] 按各 Sheet 确认结果继续解析…`])
       const results: ParseResultItem[] = []
-      const bySheetResult: Record<string, ReviewRow[]> = {}
       try {
         for (let i = 0; i < bySheet.length; i++) {
           if (!mountedRef.current) return
@@ -1228,35 +1282,24 @@ const DocTasksExcelFormatPage: React.FC = () => {
           }
           const item = res as ParseResultItem
           results.push(item)
-          bySheetResult[item.sheetName] = enrichPreviewRows(
-            (item.standardRows ?? []).map((r, idx) => ({
-              ...r,
-              _key: `${item.sheetName}-${Date.now()}-${idx}`,
-              sheet_name: item.sheetName,
-            })),
-          )
         }
         if (!mountedRef.current) return
-        fullParseResultsRef.current = results
-        setParseResults(results.map((r) => ({ ...r, dataRows: [] as string[][] })))
-        setFinalRowsBySheet(bySheetResult)
-        setTimeout(() => {
-          const first = findFirstUnitPriceConflict(bySheetResult)
-          if (first) setUnitPriceConflict(first)
-        }, 0)
-        const pendingEmptyFilter: { sheetName: string; fullRows: ReviewRow[]; indicesToRemove: number[] }[] = []
-        for (const [sn, rws] of Object.entries(bySheetResult)) {
-          const indices = getEmptyGoodsNameIndices(rws)
-          if (indices.length > 0) pendingEmptyFilter.push({ sheetName: sn, fullRows: rws, indicesToRemove: indices })
+        const mappedForState = results.map((r) => ({ ...r, dataRows: [] as string[][] }))
+        if (mergeFilterResultsIntoExisting) {
+          fullParseResultsRef.current = [...fullParseResultsRef.current, ...results]
+          setParseResults((prev) => [...prev, ...mappedForState])
+        } else {
+          fullParseResultsRef.current = results
+          setParseResults(mappedForState)
         }
-        if (pendingEmptyFilter.length > 0) setEmptyGoodsNameConfirm({ bySheet: pendingEmptyFilter })
+        setSheetParseOffset(sheetParseOffsetAfterBatch)
         setParseProgress(null)
-        appendParseLog(`[${formatLogTime()}] 全部完成，共 ${results.length} 个 Sheet`)
+        appendParseLog(`[${formatLogTime()}] 本批清洗确认后解析完成，共 ${results.length} 个 Sheet`)
         if (results.length > 0) {
           setActivePreviewTab(results[0].sheetName)
           setActiveMappingTab(results[0].sheetName)
         }
-        msg.success(`已解析 ${results.length} 个 Sheet，请按 Tab 核对映射与预览`)
+        msg.success(`已解析 ${results.length} 个 Sheet，请在步骤 2 确认映射后在步骤 3 查看预览`)
       } catch (e: unknown) {
         if (!mountedRef.current) return
         const err = e as Error
@@ -1267,7 +1310,7 @@ const DocTasksExcelFormatPage: React.FC = () => {
         if (mountedRef.current) setParseLoading(false)
       }
     },
-    [filterPreviewState, msg, token, getEmptyGoodsNameIndices]
+    [filterPreviewState, msg, token]
   )
 
   /** 用户修改某 sheet 某列的 standardKey */
@@ -1312,7 +1355,6 @@ const DocTasksExcelFormatPage: React.FC = () => {
         }, 0)
         return next
       })
-      setHasConfirmed(true)
       msg.success(`「${sheetName}」已生成 ${rows.length} 条标准数据`)
       const emptyIndices = getEmptyGoodsNameIndices(rows)
       if (emptyIndices.length > 0) {
@@ -1359,15 +1401,44 @@ const DocTasksExcelFormatPage: React.FC = () => {
     })
   }
 
-  /** 当前用于入库/下载的行（按 saveScope 取当前 Tab 或全部合并），每行自动注入 sheet_name */
-  const rowsForSave = useMemo(() => {
-    if (saveScope === 'current' && activePreviewTab) {
-      return (finalRowsBySheet[activePreviewTab] ?? []).map((r) => ({ ...r, sheet_name: activePreviewTab }))
+  /** 下拉选项顺序：与解析 Tab 一致，其余按名称排序 */
+  const saveSheetSelectOptions = useMemo(() => {
+    const keysWithRows = Object.keys(finalRowsBySheet).filter((k) => (finalRowsBySheet[k]?.length ?? 0) > 0)
+    const fromParse = parseResults.map((r) => r.sheetName).filter((n) => keysWithRows.includes(n))
+    const rest = keysWithRows.filter((k) => !fromParse.includes(k)).sort()
+    return [...fromParse, ...rest]
+  }, [parseResults, finalRowsBySheet])
+
+  useEffect(() => {
+    const finalKeys = Object.keys(finalRowsBySheet).filter((k) => (finalRowsBySheet[k]?.length ?? 0) > 0)
+    if (finalKeys.length === 0) {
+      setSaveSheetNames([])
+      return
     }
-    return Object.entries(finalRowsBySheet).flatMap(([sheetName, rows]) =>
-      rows.map((r) => ({ ...r, sheet_name: sheetName }))
-    )
-  }, [saveScope, activePreviewTab, finalRowsBySheet])
+    const nameOrder = parseResults.map((r) => r.sheetName).filter((n) => finalRowsBySheet[n]?.length)
+    const orderedKeys =
+      nameOrder.length > 0 ? [...nameOrder, ...finalKeys.filter((k) => !nameOrder.includes(k)).sort()] : [...finalKeys].sort()
+    setSaveSheetNames((prev) => {
+      const keySet = new Set(finalKeys)
+      const kept = prev.filter((n) => keySet.has(n))
+      const prevSet = new Set(prev)
+      const added = orderedKeys.filter((k) => !prevSet.has(k))
+      const next = kept.length === 0 ? orderedKeys : [...kept, ...added]
+      if (next.length === prev.length && next.every((n, i) => prev[i] === n)) return prev
+      return next
+    })
+  }, [finalRowsBySheet, parseResults])
+
+  /** 当前用于入库/下载的行（按 saveSheetNames 多选合并），每行注入 sheet_name */
+  const rowsForSave = useMemo(() => {
+    if (saveSheetNames.length === 0) return []
+    const nameSet = new Set(saveSheetNames)
+    const ordered = saveSheetSelectOptions.filter((n) => nameSet.has(n))
+    return ordered.flatMap((sheetName) => {
+      const rows = finalRowsBySheet[sheetName] ?? []
+      return rows.map((r) => ({ ...r, sheet_name: sheetName }))
+    })
+  }, [saveSheetNames, saveSheetSelectOptions, finalRowsBySheet])
 
   /** 只要提供了不含税单价（含 0），即按税率重算含税单价；若含税也有填则以不含税为准（与后端一致） */
   const normalizePriceInclFromExcl = useCallback((row: Record<string, unknown>): Record<string, unknown> => {
@@ -1414,11 +1485,6 @@ const DocTasksExcelFormatPage: React.FC = () => {
         await axios.post('/api/structured-exports', { items: payload, project_name: projName || '未命名项目', list_type: 'quote' }, { headers }).catch(() => {})
       }
       setOverwriteModalOpen(false)
-      setFinalRowsBySheet({})
-      setParseResults([])
-      fullParseResultsRef.current = []
-      setFileList([])
-      setHasConfirmed(false)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { message?: string } } }
       msg.error(err?.response?.data?.message || '入库失败')
@@ -1549,6 +1615,7 @@ const DocTasksExcelFormatPage: React.FC = () => {
       }))
       setParseResults(virtualResults)
       fullParseResultsRef.current = virtualResults
+      setSheetParseOffset(0)
       setFinalRowsBySheet(grouped)
       setTimeout(() => {
         const first = findFirstUnitPriceConflict(grouped)
@@ -1556,7 +1623,6 @@ const DocTasksExcelFormatPage: React.FC = () => {
       }, 0)
       setActivePreviewTab(sheetNames[0])
       setActiveMappingTab(sheetNames[0])
-      setHasConfirmed(true)
       setProjectName(proj)
       setFilesModalOpen(false)
       msg.success(`已加载「${filename}」共 ${items.length} 条数据到预览区，可编辑后重新入库`)
@@ -1883,7 +1949,7 @@ const DocTasksExcelFormatPage: React.FC = () => {
   const previewTotalsBySheet = useMemo(() => {
     const out: Record<string, { sumExcl: number; sumIncl: number }> = {}
     for (const one of parseResults) {
-      const rows = finalRowsBySheet[one.sheetName] ?? one.standardRows ?? []
+      const rows = finalRowsBySheet[one.sheetName] ?? []
       let sumExcl = 0
       let sumIncl = 0
       for (const row of rows) {
@@ -2007,9 +2073,9 @@ const DocTasksExcelFormatPage: React.FC = () => {
           </Upload.Dragger>
           {sheetList.length > 0 && (
             <Space align="center">
-              <Tooltip title="多 Sheet 的 Excel 可在此选择要参与解析的工作表，至少选一个。">
+              <Tooltip title="上传后默认已全选所有工作表；可取消部分。解析与入库时均保留各 Sheet 名称。">
                 <span>
-                  <Text type="secondary">选择要解析的 Sheet（可多选）：</Text>
+                  <Text type="secondary">选择要解析的 Sheet（默认全选，可多选）：</Text>
                   <Select
                 mode="multiple"
                 value={selectedSheetIndices}
@@ -2033,7 +2099,7 @@ const DocTasksExcelFormatPage: React.FC = () => {
             title={
               sheetsLoading
                 ? '正在读取工作表列表，请稍候…'
-                : '根据所选 Sheet 自动识别表头并匹配到标准字段，生成映射结果供下方确认与修改。'
+                : '按「已选 Sheet」升序每次最多解析 5 个；解析完一批后可再次点击继续后续 Sheet。更换勾选会从头计数。'
             }
           >
             <span>
@@ -2042,6 +2108,13 @@ const DocTasksExcelFormatPage: React.FC = () => {
               </Button>
             </span>
           </Tooltip>
+          {sheetList.length > 0 && (
+            <Tooltip title="清空已合并的解析结果，游标回到第 1 个已选 Sheet；下次仍每批最多 5 个。">
+              <Button onClick={resetSheetParseBatch} disabled={parseLoading}>
+                重置解析批次
+              </Button>
+            </Tooltip>
+          )}
           {parseProgress && (
             <Text type="secondary">
               正在解析第 {parseProgress.current}/{parseProgress.total} 个 Sheet
@@ -2268,7 +2341,9 @@ const DocTasksExcelFormatPage: React.FC = () => {
         )}
         {parseResults.length > 0 && (
           <div style={{ marginTop: 12 }}>
-            <Text type="secondary">已解析 {parseResults.length} 个 Sheet，请在下方按 Tab 核对映射与预览</Text>
+            <Text type="secondary">
+              已解析 {parseResults.length} 个 Sheet；请在步骤 2 确认各 Sheet 映射后，步骤 3 才会生成标准数据预览。
+            </Text>
           </div>
         )}
       </Card>
@@ -2382,17 +2457,21 @@ const DocTasksExcelFormatPage: React.FC = () => {
               />
             </span>
           </Tooltip>
-          <Tooltip title="选择仅保存当前 Sheet 的数据，或将所有 Sheet 合并后一起保存。">
+          <Tooltip title="勾选要参与入库、下载 Excel、另存为的 Sheet；未勾选的表仍可在 Tab 中预览编辑。新解析出的表默认会加入勾选。">
             <span>
               <Typography.Text type="secondary">存入范围：</Typography.Text>
               <Select
-                value={saveScope}
-                onChange={setSaveScope}
-                style={{ width: 160 }}
-                options={[
-                  { value: 'current', label: '当前 Sheet' },
-                  { value: 'all', label: '全部 Sheet（合并）' },
-                ]}
+                mode="multiple"
+                allowClear
+                placeholder="选择 Sheet"
+                maxTagCount="responsive"
+                value={saveSheetNames}
+                onChange={(v) => setSaveSheetNames(v)}
+                style={{ minWidth: 280, maxWidth: 480 }}
+                options={saveSheetSelectOptions.map((name) => ({
+                  value: name,
+                  label: `${name}（${finalRowsBySheet[name]?.length ?? 0} 行）`,
+                }))}
               />
             </span>
           </Tooltip>
@@ -2462,20 +2541,27 @@ const DocTasksExcelFormatPage: React.FC = () => {
                   style={{ marginTop: 8 }}
                   destroyOnHidden
                   items={parseResults.map((one) => {
-                    const rawRows = finalRowsBySheet[one.sheetName] ?? one.standardRows ?? []
+                    const rawRows = finalRowsBySheet[one.sheetName] ?? []
                     const totals = previewTotalsBySheet[one.sheetName] ?? { sumExcl: 0, sumIncl: 0 }
                     const cols = previewColumnsBySheet[one.sheetName]
+                    const confirmed = rawRows.length > 0
                     return {
                       key: one.sheetName,
-                      label: `${one.sheetName} (${rawRows.length} 行)`,
+                      label: confirmed ? `${one.sheetName}（${rawRows.length} 行）` : `${one.sheetName}（未确认映射）`,
                       children: cols ? (
-                        <PreviewSheetTable
-                          sheetName={one.sheetName}
-                          rawRows={rawRows}
-                          columns={cols}
-                          totals={totals}
-                          addPreviewRow={addPreviewRow}
-                        />
+                        confirmed ? (
+                          <PreviewSheetTable
+                            sheetName={one.sheetName}
+                            rawRows={rawRows}
+                            columns={cols}
+                            totals={totals}
+                            addPreviewRow={addPreviewRow}
+                          />
+                        ) : (
+                          <Typography.Paragraph type="secondary" style={{ marginTop: 16 }}>
+                            请先在步骤 2 中对该 Sheet 点击「确认本 Sheet 映射并生成标准数据」，生成后此处显示可编辑预览表。
+                          </Typography.Paragraph>
+                        )
                       ) : null,
                     }
                   })}

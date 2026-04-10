@@ -40,12 +40,14 @@ import dayjs, { type Dayjs } from 'dayjs'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { DueCountdownCell, useNowEverySecond } from '../components/DueCountdownCell'
+import { auditGateAllowsEditWhenNotApproving } from '../utils/auditGateUi'
 import {
   assigneeLabelMap,
   buildConstructionAssigneeOptions,
   type AssigneeInactiveRef,
   type AssigneeUserRow,
 } from '../utils/constructionAssigneeOptions'
+import { parseDueAtHourPickerValue } from '../utils/dueAtHourPickerParse'
 
 const { Title, Text, Paragraph } = Typography
 const { Search } = Input
@@ -71,8 +73,7 @@ function mtAuditLabel(audit: GateAudit | undefined): { text: string; color: stri
 }
 
 function canDeleteMtWithAudit(audit: GateAudit | undefined): boolean {
-  if (!audit?.dingtalk_gate) return true
-  return audit.audit_status !== 'approving'
+  return auditGateAllowsEditWhenNotApproving(audit)
 }
 
 function canSubmitMtDingTalk(audit: GateAudit | undefined): boolean {
@@ -102,6 +103,12 @@ type MaintenanceTask = {
   updated_at: string
   created_by: string | null
   audit?: GateAudit
+}
+
+/** 与 PUT /api/maintenance-tasks/:id 一致：已完成/已取消不可改；审批中不可改 */
+function canEditMtBasicInfo(t: MaintenanceTask): boolean {
+  if (t.status === 'completed' || t.status === 'cancelled') return false
+  return auditGateAllowsEditWhenNotApproving(t.audit)
 }
 
 function mtTaskHasAssignee(task: MaintenanceTask | null | undefined): boolean {
@@ -190,6 +197,8 @@ const TYPE_OPTIONS = [
   { value: 'routine', label: '例行维护' },
   { value: 'upgrade', label: '升级改造' },
 ]
+
+const VALID_MAINTENANCE_TASK_TYPES = new Set(TYPE_OPTIONS.map((o) => o.value))
 
 const LOG_ACTION_LABEL: Record<string, string> = {
   note: '记录',
@@ -314,6 +323,12 @@ const MaintenanceSchedulePage: React.FC = () => {
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm] = Form.useForm()
   const dueAtLastDayKeyRef = useRef<string | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  const [editRecord, setEditRecord] = useState<MaintenanceTask | null>(null)
+  const [editForm] = Form.useForm()
+  const editDueAtLastDayKeyRef = useRef<string | null>(null)
+  const editRecordRef = useRef<MaintenanceTask | null>(null)
+  const [editSubmitting, setEditSubmitting] = useState(false)
   const listNow = useNowEverySecond()
   const [createSubmitting, setCreateSubmitting] = useState(false)
 
@@ -389,6 +404,21 @@ const MaintenanceSchedulePage: React.FC = () => {
       dueAtLastDayKeyRef.current = def.format('YYYY-MM-DD')
     }
   }, [createOpen, createForm])
+
+  const fillEditFormFromRecord = useCallback(
+    (rec: MaintenanceTask) => {
+      const d = parseDueAtHourPickerValue(rec.due_at)
+      const tt = String(rec.task_type)
+      editForm.setFieldsValue({
+        title: rec.title,
+        task_type: VALID_MAINTENANCE_TASK_TYPES.has(tt) ? tt : 'inspect',
+        due_at: d,
+        content: rec.content ?? '',
+      })
+      editDueAtLastDayKeyRef.current = d ? d.format('YYYY-MM-DD') : null
+    },
+    [editForm],
+  )
 
   useEffect(() => {
     if (!drawerOpen) return
@@ -506,6 +536,40 @@ const MaintenanceSchedulePage: React.FC = () => {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '创建失败')
     } finally {
       setCreateSubmitting(false)
+    }
+  }
+
+  const handleEditBasicSave = async () => {
+    if (!editRecord) return
+    try {
+      const v = await editForm.validateFields()
+      const due = v.due_at ? dayjs(v.due_at).startOf('hour') : null
+      if (!due) {
+        msg.error('请选择截止时间')
+        return
+      }
+      setEditSubmitting(true)
+      const res = await axios.put<MaintenanceTask & { audit?: GateAudit }>(`/api/maintenance-tasks/${editRecord.id}`, {
+        title: (v.title ?? '').trim(),
+        task_type: v.task_type,
+        due_at: due.format('YYYY-MM-DD HH:00'),
+        content: (v.content ?? '').trim() || undefined,
+      })
+      msg.success('已保存')
+      const savedId = editRecord.id
+      setEditOpen(false)
+      setEditRecord(null)
+      editRecordRef.current = null
+      editForm.resetFields()
+      fetchList()
+      if (drawerOpen && detailId === savedId && res.data) {
+        setTask({ ...res.data, audit: res.data.audit })
+      }
+    } catch (e: unknown) {
+      if ((e as { errorFields?: unknown })?.errorFields) return
+      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存失败')
+    } finally {
+      setEditSubmitting(false)
     }
   }
 
@@ -818,10 +882,21 @@ const MaintenanceSchedulePage: React.FC = () => {
     },
     {
       title: '操作',
-      width: 260,
+      width: 198,
       fixed: 'right',
       render: (_, r) => (
-        <Space size="small" wrap>
+        <Space size={[4, 4]} wrap>
+          {canEditMtBasicInfo(r) ? (
+            <a
+              onClick={() => {
+                editRecordRef.current = r
+                setEditRecord(r)
+                setEditOpen(true)
+              }}
+            >
+              编辑
+            </a>
+          ) : null}
           <a onClick={() => openDetail(r)}>办理</a>
           {mtDingSubmitAllowed(r.audit, r) ? (
             <a
@@ -875,8 +950,84 @@ const MaintenanceSchedulePage: React.FC = () => {
         loading={loading}
         pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }}
         size="middle"
-        scroll={{ x: 1290 }}
+        scroll={{ x: 1328 }}
       />
+
+      <Modal
+        title="编辑基本信息"
+        open={editOpen}
+        onCancel={() => {
+          setEditOpen(false)
+          setEditRecord(null)
+          editRecordRef.current = null
+          editForm.resetFields()
+        }}
+        afterOpenChange={(opened) => {
+          if (!opened) return
+          const rec = editRecordRef.current
+          if (rec) {
+            requestAnimationFrame(() => {
+              fillEditFormFromRecord(rec)
+            })
+          }
+        }}
+        onOk={() => void handleEditBasicSave()}
+        confirmLoading={editSubmitting}
+        destroyOnClose
+        width={560}
+        okText="保存"
+      >
+        <Form
+          key={editRecord ? `mt-edit-${editRecord.id}` : 'mt-edit-closed'}
+          form={editForm}
+          layout="vertical"
+          preserve={false}
+        >
+          <Form.Item name="title" label="任务标题" rules={[{ required: true, message: '请输入任务标题' }]}>
+            <Input placeholder="简要概括" />
+          </Form.Item>
+          <Form.Item name="task_type" label="类型" rules={[{ required: true, message: '请选择类型' }]}>
+            <Select options={TYPE_OPTIONS} placeholder="巡检 / 维修 / 维护等" />
+          </Form.Item>
+          <Form.Item
+            name="due_at"
+            label="截止时间"
+            rules={[{ required: true, message: '请选择截止时间（精确到小时）' }]}
+            extra="不可选今天之前的日期；选今天时不可选当前时刻之前的整点。"
+          >
+            <DatePicker
+              disabledDate={dueAtDisabledDate}
+              disabledTime={dueAtDisabledTime}
+              defaultPickerValue={dayjs().hour(18).minute(0).second(0)}
+              showTime={{
+                format: 'HH',
+                showSecond: false,
+                disabledMinutes: () => Array.from({ length: 59 }, (_, i) => i + 1),
+                disabledSeconds: () => Array.from({ length: 59 }, (_, i) => i + 1),
+              }}
+              format="YYYY-MM-DD HH:00"
+              style={{ width: '100%' }}
+              onChange={(d) => {
+                if (!d) {
+                  editForm.setFieldValue('due_at', null)
+                  editDueAtLastDayKeyRef.current = null
+                  return
+                }
+                const dayKey = d.format('YYYY-MM-DD')
+                const sameCalendarDay = editDueAtLastDayKeyRef.current === dayKey
+                editDueAtLastDayKeyRef.current = dayKey
+                const next = sameCalendarDay
+                  ? d.startOf('hour')
+                  : d.startOf('day').hour(18).minute(0).second(0).millisecond(0)
+                editForm.setFieldValue('due_at', next)
+              }}
+            />
+          </Form.Item>
+          <Form.Item name="content" label="任务说明">
+            <TextArea rows={3} placeholder="选填：范围、要求等" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         title="新建维护任务"
