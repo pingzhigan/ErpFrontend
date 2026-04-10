@@ -314,11 +314,17 @@ function dueAtDisabledTime(date: Dayjs | null | undefined) {
   return { disabledHours: () => disabledHours }
 }
 
-function formatDueAtText(v: string | null | undefined): string {
+function sanitizeNullableText(v: string | null | undefined): string | null {
   const s = String(v ?? '').trim()
-  if (!s) return '—'
+  if (!s) return null
   const l = s.toLowerCase()
-  if (l === 'null' || l === 'undefined') return '—'
+  if (l === 'null' || l === 'undefined') return null
+  return s
+}
+
+function formatDueAtText(v: string | null | undefined): string {
+  const s = sanitizeNullableText(v)
+  if (!s) return '—'
   const d = dayjs(s)
   return d.isValid() ? s : '—'
 }
@@ -879,7 +885,7 @@ const MaintenanceSchedulePage: React.FC = () => {
       dataIndex: 'assignee',
       width: 120,
       ellipsis: true,
-      render: (v: string | null) => (v?.trim() ? v : <Text type="secondary">待分配</Text>),
+      render: (v: string | null) => (sanitizeNullableText(v) ? sanitizeNullableText(v) : <Text type="secondary">待分配</Text>),
     },
     {
       title: '审批',
