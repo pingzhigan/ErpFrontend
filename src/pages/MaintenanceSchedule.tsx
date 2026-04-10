@@ -314,6 +314,15 @@ function dueAtDisabledTime(date: Dayjs | null | undefined) {
   return { disabledHours: () => disabledHours }
 }
 
+function formatDueAtText(v: string | null | undefined): string {
+  const s = String(v ?? '').trim()
+  if (!s) return '—'
+  const l = s.toLowerCase()
+  if (l === 'null' || l === 'undefined') return '—'
+  const d = dayjs(s)
+  return d.isValid() ? s : '—'
+}
+
 const MaintenanceSchedulePage: React.FC = () => {
   const { message: msg } = App.useApp()
   const [list, setList] = useState<MaintenanceTask[]>([])
@@ -848,7 +857,7 @@ const MaintenanceSchedulePage: React.FC = () => {
       dataIndex: 'due_at',
       width: 208,
       render: (v: string, r: MaintenanceTask) =>
-        r.status === 'completed' ? (v?.trim() || '—') : <DueCountdownCell dueAt={v} now={listNow} />,
+        r.status === 'completed' ? formatDueAtText(v) : <DueCountdownCell dueAt={v} now={listNow} />,
     },
     {
       title: '进度',

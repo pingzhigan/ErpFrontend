@@ -241,6 +241,15 @@ function formatMoney(n: number | null | undefined) {
     : '—'
 }
 
+function formatDueAtText(v: string | null | undefined): string {
+  const s = String(v ?? '').trim()
+  if (!s) return '—'
+  const l = s.toLowerCase()
+  if (l === 'null' || l === 'undefined') return '—'
+  const d = dayjs(s)
+  return d.isValid() ? s : '—'
+}
+
 function stepCurrent(status: MinorWorkStatus): number {
   if (status === 'pending') return 0
   if (status === 'dispatched' || status === 'in_progress') return 1
@@ -977,7 +986,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       dataIndex: 'due_at',
       width: 208,
       render: (v: string | null, r: MinorWorkOrder) =>
-        r.status === 'closed' ? (v?.trim() || '—') : <DueCountdownCell dueAt={v} now={listNow} />,
+        r.status === 'closed' ? formatDueAtText(v) : <DueCountdownCell dueAt={v} now={listNow} />,
     },
     {
       title: '工程金额',
