@@ -16,10 +16,17 @@ export type SystemReleaseEntry = {
 }
 
 /** 当前对外版本号（与更新说明首条 version 建议保持一致） */
-export const APP_VERSION = '2.0.2'
+export const APP_VERSION = '2.0.3'
 
 /** 从新到旧排列；弹窗内按此顺序展示 */
 export const SYSTEM_RELEASE_NOTES: SystemReleaseEntry[] = [
+  {
+    version: '2.0.3',
+    date: '2026-04-18',
+    items: [
+      '进度管理：增加了品牌/型号/参数在历史记录中的显示；历史记录显示“—”为正常表现。',
+    ],
+  },
   {
     version: '2.0.2',
     date: '2026-04-11',
