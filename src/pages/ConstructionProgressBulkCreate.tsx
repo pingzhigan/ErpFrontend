@@ -15,6 +15,7 @@ import { buildConstructionAssigneeOptions, type AssigneeUserRow } from '../utils
 const { Title, Text, Paragraph } = Typography
 
 type ProductRow = {
+  id?: unknown
   goods_name?: unknown
   quantity?: unknown
   sheet_name?: unknown
@@ -48,7 +49,9 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
   const [bulkPlannedStart, setBulkPlannedStart] = useState('')
   const [bulkPlannedEnd, setBulkPlannedEnd] = useState('')
   const [loading, setLoading] = useState(false)
-  const [rows, setRows] = useState<{ key: string; goods_name: string; sheet_name: string | null; required_qty: number; responsible: string }[]>([])
+  const [rows, setRows] = useState<
+    { key: string; goods_name: string; sheet_name: string | null; required_qty: number; responsible: string; source_product_id?: number }[]
+  >([])
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
   const [sheetFilter, setSheetFilter] = useState<string | null>(null)
   const [defaultResponsible, setDefaultResponsible] = useState('')
@@ -57,8 +60,8 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
   const [loadConfirmOpen, setLoadConfirmOpen] = useState(false)
   const [loadConfirmForm] = Form.useForm<{ planned_start: Dayjs; planned_end: Dayjs }>()
-  /** 最近一次从报价拉取：原始行数 vs 合并后候选数（便于对照报价清单条数） */
-  const [quoteLoadStats, setQuoteLoadStats] = useState<{ rows: number; merged: number; skippedEmptyName: number } | null>(
+  /** 最近一次从报价拉取：原始行数 vs 候选条数（与报价清单一一对应，不含空名称行） */
+  const [quoteLoadStats, setQuoteLoadStats] = useState<{ rows: number; candidates: number; skippedEmptyName: number } | null>(
     null,
   )
   const [skippedModalOpen, setSkippedModalOpen] = useState(false)
@@ -252,31 +255,46 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
         page += 1
       }
 
-      const grouped = new Map<string, { goods_name: string; sheet_name: string | null; required_qty: number }>()
+      const out: {
+        key: string
+        goods_name: string
+        sheet_name: string | null
+        required_qty: number
+        responsible: string
+        source_product_id?: number
+      }[] = []
       let skippedEmptyName = 0
-      for (const r of list) {
+      for (let i = 0; i < list.length; i++) {
+        const r = list[i]
         const name = r.goods_name != null ? String(r.goods_name).trim() : ''
         if (!name) {
           skippedEmptyName += 1
           continue
         }
+        const rawId = r.id
+        const numId =
+          typeof rawId === 'number' && Number.isFinite(rawId)
+            ? rawId
+            : rawId != null && rawId !== ''
+              ? Number(rawId)
+              : NaN
+        const hasProductId = Number.isFinite(numId)
+        const key = hasProductId ? `quote-${numId}` : `quote-row-${i}`
         const sn = r.sheet_name != null && String(r.sheet_name).trim() ? String(r.sheet_name).trim() : null
         const qty = r.quantity != null && r.quantity !== '' ? Number(r.quantity) : 0
         const q = Number.isFinite(qty) ? qty : 0
-        const key = `${sn ?? '__none__'}::${name}`
-        const prev = grouped.get(key)
-        grouped.set(key, { goods_name: name, sheet_name: sn, required_qty: (prev?.required_qty ?? 0) + q })
+        const row: (typeof out)[number] = {
+          key,
+          goods_name: name,
+          sheet_name: sn,
+          required_qty: Math.round(q * 100) / 100,
+          responsible: '',
+        }
+        if (hasProductId) row.source_product_id = numId
+        out.push(row)
       }
 
-      const out = [...grouped.entries()].map(([key, v]) => ({
-        key,
-        goods_name: v.goods_name,
-        sheet_name: v.sheet_name,
-        required_qty: Math.round(v.required_qty * 100) / 100,
-        responsible: '',
-      }))
-      out.sort((a, b) => (a.sheet_name ?? '').localeCompare(b.sheet_name ?? '') || a.goods_name.localeCompare(b.goods_name))
-      setQuoteLoadStats({ rows: list.length, merged: out.length, skippedEmptyName })
+      setQuoteLoadStats({ rows: list.length, candidates: out.length, skippedEmptyName })
       setRows(out)
       setSelectedKeys(out.map((x) => x.key))
       msg.success(`已加载 ${out.length} 条任务候选（计划周期 ${ps} ~ ${pe}）`)
@@ -316,18 +334,24 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
       )
       return
     }
-    const tasks = picked.map((p) => ({
-      project_name: proj,
-      task_name: (p.goods_name ?? '').slice(0, 50) || '任务',
-      content: p.goods_name,
-      sheet_name: p.sheet_name ?? null,
-      responsible: (p.responsible ?? '').trim(),
-      planned_start: ps,
-      planned_end: pe,
-      required_qty: p.required_qty,
-      done_qty: 0,
-      status: 'not_started',
-    }))
+    const tasks = picked.map((p) => {
+      const t: Record<string, unknown> = {
+        project_name: proj,
+        task_name: (p.goods_name ?? '').slice(0, 50) || '任务',
+        content: p.goods_name,
+        sheet_name: p.sheet_name ?? null,
+        responsible: (p.responsible ?? '').trim(),
+        planned_start: ps,
+        planned_end: pe,
+        required_qty: p.required_qty,
+        done_qty: 0,
+        status: 'not_started',
+      }
+      if (p.source_product_id != null && Number.isFinite(p.source_product_id)) {
+        t.source_product_id = p.source_product_id
+      }
+      return t
+    })
     try {
       const res = await axios.post<{
         created?: number
@@ -354,10 +378,17 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
     navigate('/construction/progress')
   }
 
-  const columns: ColumnsType<{ key: string; goods_name: string; sheet_name: string | null; required_qty: number; responsible: string }> = [
+  const columns: ColumnsType<{
+    key: string
+    goods_name: string
+    sheet_name: string | null
+    required_qty: number
+    responsible: string
+    source_product_id?: number
+  }> = [
     { title: 'Sheet', dataIndex: 'sheet_name', width: 160, render: (v: string | null) => (v ? <Tag>{v}</Tag> : <Text type="secondary">（无）</Text>) },
     { title: '商品名称（任务）', dataIndex: 'goods_name' },
-    { title: '需求数量（汇总）', dataIndex: 'required_qty', width: 140, align: 'right' },
+    { title: '需求数量', dataIndex: 'required_qty', width: 140, align: 'right' },
     {
       title: '负责人',
       dataIndex: 'responsible',
@@ -393,7 +424,7 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
 
       <Card size="small" title="第一步：选择项目并加载候选" style={{ marginBottom: 16 }}>
         <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-          下拉为「施工管理-项目信息」中的施工项目，可多次从报价清单批量追加进度任务；与已有任务在同一项目、同一工作表且施工内容完全相同的条目提交时会自动跳过、不重复创建。选择项目后按报价清单汇总生成任务候选；点击「加载候选」时在弹窗中确认计划周期（默认与项目信息一致），批量创建将使用该周期。
+          下拉为「施工管理-项目信息」中的施工项目，可多次从报价清单批量追加进度任务；与已有任务在同一项目、同一工作表且施工内容完全相同的条目提交时会自动跳过、不重复创建（按报价清单行关联时以报价行为准）。选择项目后按报价清单逐条生成任务候选；点击「加载候选」时在弹窗中确认计划周期（默认与项目信息一致），批量创建将使用该周期。
         </Text>
         <Space wrap size="middle" align="center">
           <Space size={8} align="center">
@@ -499,8 +530,8 @@ const ConstructionProgressBulkCreatePage: React.FC = () => {
           <Text type="secondary">共 {rows.length} 条任务候选，勾选后点击「加入进度管理」。</Text>
           {quoteLoadStats ? (
             <Paragraph type="secondary" style={{ margin: '8px 0 0', fontSize: 13 }}>
-              说明：报价清单本次共读取 <Text strong>{quoteLoadStats.rows}</Text> 行；按「Sheet + 商品名称」合并为{' '}
-              <Text strong>{quoteLoadStats.merged}</Text> 条（同一 Sheet 下同名商品会合并需求数量，多条报价行对应一条进度任务）。
+              说明：报价清单本次共读取 <Text strong>{quoteLoadStats.rows}</Text> 行；生成{' '}
+              <Text strong>{quoteLoadStats.candidates}</Text> 条任务候选（与报价清单一一对应，同名多行不合并）。
               {quoteLoadStats.skippedEmptyName > 0 ? (
                 <>
                   {' '}

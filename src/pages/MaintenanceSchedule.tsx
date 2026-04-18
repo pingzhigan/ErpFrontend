@@ -272,12 +272,12 @@ const TYPE_MAP: Record<string, string> = {
   upgrade: '其他任务',
 }
 
-const TYPE_OPTIONS = [
+const TYPE_OPTIONS: { value: TaskType; label: string }[] = [
   { value: 'inspect', label: '巡检' },
   { value: 'maintain', label: '维护' },
   { value: 'repair', label: '维修' },
   { value: 'routine', label: '其他任务' },
-] as const
+]
 
 const VALID_MAINTENANCE_TASK_TYPES = new Set<string>(TYPE_OPTIONS.map((o) => o.value))
 

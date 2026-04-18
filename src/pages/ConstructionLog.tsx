@@ -5,8 +5,8 @@
 
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { App, Button, Card, DatePicker, Descriptions, Divider, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd'
-import { FileTextOutlined } from '@ant-design/icons'
+import { App, Button, Card, Checkbox, DatePicker, Descriptions, Divider, Form, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Typography } from 'antd'
+import { FileTextOutlined, SettingOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import axios from 'axios'
@@ -152,7 +152,7 @@ const PROGRESS_STATUS_MAP: Record<string, string> = {
   completed: '已完成',
 }
 
-// 进度任务接口
+// 进度任务接口（品牌/型号/参数来自报价关联，见 GET /api/construction/tasks）
 type ProgressTask = {
   id: number
   content: string
@@ -163,6 +163,100 @@ type ProgressTask = {
   doneQty: number
   plannedEnd: string
   status: string
+  brand?: string | null
+  model?: string | null
+  params?: string | null
+}
+
+type PreviewTaskRow = ProgressTask & { todayQty: number; remainingAfter: number }
+
+const LS_TASK_PICK_COLS_STEP1 = 'constructionLog.taskPicker.columns.step1.v1'
+const LS_TASK_PICK_COLS_STEP2 = 'constructionLog.taskPicker.columns.step2.v1'
+
+/** 第一步弹窗表格：除「施工内容」「今日完成」外均可隐藏 */
+const TASK_PICK_STEP1_KEYS = ['brand', 'model', 'params', 'sheet', 'status', 'requiredQty', 'doneQty', 'project', 'responsible'] as const
+type TaskPickStep1ColKey = (typeof TASK_PICK_STEP1_KEYS)[number]
+
+const TASK_PICK_STEP1_LABELS: Record<TaskPickStep1ColKey, string> = {
+  brand: '品牌',
+  model: '型号',
+  params: '参数',
+  sheet: 'Sheet',
+  status: '状态',
+  requiredQty: '总量',
+  doneQty: '已完成',
+  project: '项目',
+  responsible: '负责人',
+}
+
+function defaultTaskPickStep1Visibility(): Record<TaskPickStep1ColKey, boolean> {
+  return Object.fromEntries(TASK_PICK_STEP1_KEYS.map((k) => [k, true])) as Record<TaskPickStep1ColKey, boolean>
+}
+
+function loadTaskPickStep1Visibility(): Record<TaskPickStep1ColKey, boolean> {
+  const base = defaultTaskPickStep1Visibility()
+  try {
+    const raw = localStorage.getItem(LS_TASK_PICK_COLS_STEP1)
+    if (!raw) return base
+    const parsed = JSON.parse(raw) as Partial<Record<TaskPickStep1ColKey, boolean>>
+    return { ...base, ...parsed }
+  } catch {
+    return base
+  }
+}
+
+/** 第二步预览表：除「任务名称」「今日完成数量」「确认后剩余」外可隐藏（后两项也可隐藏以便极简视图） */
+const TASK_PICK_STEP2_KEYS = ['brand', 'model', 'params', 'sheet', 'todayQty', 'remainingAfter', 'project', 'responsible'] as const
+type TaskPickStep2ColKey = (typeof TASK_PICK_STEP2_KEYS)[number]
+
+const TASK_PICK_STEP2_LABELS: Record<TaskPickStep2ColKey, string> = {
+  brand: '品牌',
+  model: '型号',
+  params: '参数',
+  sheet: 'Sheet',
+  todayQty: '今日完成数量',
+  remainingAfter: '确认后剩余',
+  project: '项目',
+  responsible: '负责人',
+}
+
+function defaultTaskPickStep2Visibility(): Record<TaskPickStep2ColKey, boolean> {
+  return Object.fromEntries(TASK_PICK_STEP2_KEYS.map((k) => [k, true])) as Record<TaskPickStep2ColKey, boolean>
+}
+
+function loadTaskPickStep2Visibility(): Record<TaskPickStep2ColKey, boolean> {
+  const base = defaultTaskPickStep2Visibility()
+  try {
+    const raw = localStorage.getItem(LS_TASK_PICK_COLS_STEP2)
+    if (!raw) return base
+    const parsed = JSON.parse(raw) as Partial<Record<TaskPickStep2ColKey, boolean>>
+    return { ...base, ...parsed }
+  } catch {
+    return base
+  }
+}
+
+const TASK_PICK_STEP1_WIDTH: Record<TaskPickStep1ColKey, number> = {
+  brand: 88,
+  model: 88,
+  params: 120,
+  sheet: 92,
+  status: 80,
+  requiredQty: 72,
+  doneQty: 72,
+  project: 120,
+  responsible: 90,
+}
+
+const TASK_PICK_STEP2_WIDTH: Record<TaskPickStep2ColKey, number> = {
+  brand: 88,
+  model: 88,
+  params: 120,
+  sheet: 92,
+  todayQty: 110,
+  remainingAfter: 100,
+  project: 120,
+  responsible: 90,
 }
 
 // 施工日志页面
@@ -178,6 +272,7 @@ const ConstructionLogPage: React.FC = () => {
   const [listLoading, setListLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [progressTasksForPicker, setProgressTasksForPicker] = useState<ProgressTask[]>([])
+  const [progressTasksLoading, setProgressTasksLoading] = useState(false)
 
   const fetchLogs = useCallback(async () => {
     setListLoading(true)
@@ -203,18 +298,21 @@ const ConstructionLogPage: React.FC = () => {
     }
   }, [headers, msg])
 
-  /** 后端列表默认每页仅 10 条，须分页拉全；可选按项目过滤（与日志所选项目一致） */
+  /** 后端列表分页拉全；可选项目、keyword（服务端 LIKE，含施工内容、负责人、Sheet、品牌型号参数等） */
   const fetchProgressTasks = useCallback(
-    async (filterProjectName?: string) => {
+    async (filterProjectName?: string, keywordArg?: string) => {
+      setProgressTasksLoading(true)
       try {
         const pageSize = 100
         let page = 1
         let total = 0
         const acc: any[] = []
+        const kw = (keywordArg ?? '').trim()
         for (;;) {
           const params: Record<string, string | number> = { page, pageSize }
           const pn = (filterProjectName ?? '').trim()
           if (pn) params.project_name = pn
+          if (kw) params.keyword = kw
           const res = await axios.get<{ list: any[]; total?: number }>('/api/construction/tasks', { params, headers })
           const chunk = res.data?.list ?? []
           total = typeof res.data?.total === 'number' ? res.data.total : total
@@ -232,10 +330,15 @@ const ConstructionLogPage: React.FC = () => {
           doneQty: Number(r.doneQty ?? r.done_qty) || 0,
           plannedEnd: String(r.plannedEnd ?? r.planned_end ?? ''),
           status: String(r.status ?? ''),
+          brand: r.brand ?? null,
+          model: r.model ?? null,
+          params: r.params ?? null,
         }))
         setProgressTasksForPicker(list)
       } catch {
         setProgressTasksForPicker([])
+      } finally {
+        setProgressTasksLoading(false)
       }
     },
     [headers],
@@ -448,19 +551,46 @@ const ConstructionLogPage: React.FC = () => {
   const [pickedDoneForSave, setPickedDoneForSave] = useState<Record<number, number>>({})
   const [taskPickProjectFilter, setTaskPickProjectFilter] = useState<string | null>(null)
   const [taskPickSheetFilter, setTaskPickSheetFilter] = useState<string | null>(null)
+  const [taskPickColVisStep1, setTaskPickColVisStep1] = useState(() => loadTaskPickStep1Visibility())
+  const [taskPickColVisStep2, setTaskPickColVisStep2] = useState(() => loadTaskPickStep2Visibility())
+  const [taskPickKeyword, setTaskPickKeyword] = useState('')
+  /** 防抖后的关键字，传给 GET /api/construction/tasks ?keyword= */
+  const [debouncedTaskPickKeyword, setDebouncedTaskPickKeyword] = useState('')
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedTaskPickKeyword(taskPickKeyword.trim()), 380)
+    return () => window.clearTimeout(t)
+  }, [taskPickKeyword])
 
   useEffect(() => {
     if (!taskPickOpen) return
     const pn = String(form.getFieldValue('project') ?? '').trim()
-    void fetchProgressTasks(pn || undefined)
-  }, [taskPickOpen, fetchProgressTasks, form])
+    void fetchProgressTasks(pn || undefined, debouncedTaskPickKeyword)
+  }, [taskPickOpen, debouncedTaskPickKeyword, fetchProgressTasks, form])
+
   const allProgressTasks = progressTasksForPicker
+
+  /** 关键词由后端筛选；此处仅项目 / Sheet 下拉（后端无 sheet 筛选项） */
   const tasksForPicker = useMemo(() => {
     let list = allProgressTasks
     if (taskPickProjectFilter) list = list.filter((t) => t.project === taskPickProjectFilter)
     if (taskPickSheetFilter) list = list.filter((t) => (t.sheetName ?? '') === taskPickSheetFilter)
     return list
   }, [allProgressTasks, taskPickProjectFilter, taskPickSheetFilter])
+
+  /** 服务端返回列表变化后，去掉已不在结果中的勾选（避免关键词收紧后仍保留无效勾选） */
+  useEffect(() => {
+    const ids = new Set(allProgressTasks.map((t) => t.id))
+    setPickedKeys((prev) => prev.filter((k) => ids.has(Number(k))))
+    setPickedQty((prev) => {
+      const next: Record<number, number> = {}
+      for (const [key, q] of Object.entries(prev)) {
+        const id = Number(key)
+        if (ids.has(id)) next[id] = q
+      }
+      return next
+    })
+  }, [allProgressTasks])
 
   const projectOptionsForPicker = useMemo(() => {
     const set = new Set(allProgressTasks.map((t) => t.project).filter(Boolean))
@@ -478,6 +608,8 @@ const ConstructionLogPage: React.FC = () => {
     setTaskPickStep(1)
     setTaskPickProjectFilter(null)
     setTaskPickSheetFilter(null)
+    setTaskPickKeyword('')
+    setDebouncedTaskPickKeyword('')
     setTaskPickOpen(true)
   }
 
@@ -516,6 +648,260 @@ const ConstructionLogPage: React.FC = () => {
         remainingAfter: Math.max(0, (t.requiredQty ?? 0) - (t.doneQty ?? 0) - Number(pickedQty[t.id] ?? 0)),
       }))
   }, [pickedKeys, pickedQty, allProgressTasks])
+
+  const specDash = (v: string | null | undefined) => ((v ?? '').trim() ? (v ?? '').trim() : '—')
+
+  const taskPickStep1TableColumns = useMemo((): ColumnsType<ProgressTask> => {
+    const v = taskPickColVisStep1
+    const cols: ColumnsType<ProgressTask> = [
+      { title: '施工内容', dataIndex: 'content', key: 'content', ellipsis: true, width: 160 },
+    ]
+    if (v.brand) {
+      cols.push({
+        title: '品牌',
+        key: 'brand',
+        width: 88,
+        ellipsis: true,
+        render: (_: unknown, r: ProgressTask) => specDash(r.brand),
+      })
+    }
+    if (v.model) {
+      cols.push({
+        title: '型号',
+        key: 'model',
+        width: 88,
+        ellipsis: true,
+        render: (_: unknown, r: ProgressTask) => specDash(r.model),
+      })
+    }
+    if (v.params) {
+      cols.push({
+        title: '参数',
+        key: 'params',
+        width: 120,
+        ellipsis: true,
+        render: (_: unknown, r: ProgressTask) => specDash(r.params),
+      })
+    }
+    if (v.sheet) {
+      cols.push({
+        title: 'Sheet',
+        key: 'sheet',
+        dataIndex: 'sheetName',
+        width: 92,
+        render: (cell: string | null) => (cell ? <Tag>{cell}</Tag> : '—'),
+      })
+    }
+    if (v.status) {
+      cols.push({
+        title: '状态',
+        key: 'status',
+        dataIndex: 'status',
+        width: 80,
+        render: (x: string) => PROGRESS_STATUS_MAP[x] ?? x,
+      })
+    }
+    if (v.requiredQty) {
+      cols.push({ title: '总量', key: 'requiredQty', dataIndex: 'requiredQty', width: 72, align: 'right' })
+    }
+    if (v.doneQty) {
+      cols.push({ title: '已完成', key: 'doneQty', dataIndex: 'doneQty', width: 72, align: 'right' })
+    }
+    cols.push({
+      title: '今日完成',
+      key: 'todayPick',
+      width: 160,
+      render: (_: unknown, r: ProgressTask) => {
+        const remaining = Math.max(0, (r.requiredQty ?? 0) - (r.doneQty ?? 0))
+        const minQty = remaining > 0 ? 1 : 0
+        return (
+          <Space>
+            <InputNumber
+              min={minQty}
+              max={remaining}
+              value={pickedQty[r.id] ?? 0}
+              onChange={(nv) => setPickedQty((prev) => ({ ...prev, [r.id]: Number(nv ?? 0) }))}
+              placeholder="必填，正数"
+            />
+            <Text type="secondary">≤{remaining}</Text>
+          </Space>
+        )
+      },
+    })
+    if (v.project) {
+      cols.push({ title: '项目', key: 'project', dataIndex: 'project', width: 120, ellipsis: true })
+    }
+    if (v.responsible) {
+      cols.push({ title: '负责人', key: 'responsible', dataIndex: 'responsible', width: 90, ellipsis: true })
+    }
+    return cols
+  }, [taskPickColVisStep1, pickedQty])
+
+  const taskPickStep1ScrollX = useMemo(() => {
+    let w = 160 + 160
+    TASK_PICK_STEP1_KEYS.forEach((k) => {
+      if (taskPickColVisStep1[k]) w += TASK_PICK_STEP1_WIDTH[k]
+    })
+    return w
+  }, [taskPickColVisStep1])
+
+  const taskPickStep2TableColumns = useMemo((): ColumnsType<PreviewTaskRow> => {
+    const v = taskPickColVisStep2
+    const cols: ColumnsType<PreviewTaskRow> = [
+      { title: '任务名称', dataIndex: 'content', key: 'content', ellipsis: true, width: 160 },
+    ]
+    if (v.brand) {
+      cols.push({
+        title: '品牌',
+        key: 'brand',
+        width: 88,
+        ellipsis: true,
+        render: (_: unknown, r: PreviewTaskRow) => specDash(r.brand),
+      })
+    }
+    if (v.model) {
+      cols.push({
+        title: '型号',
+        key: 'model',
+        width: 88,
+        ellipsis: true,
+        render: (_: unknown, r: PreviewTaskRow) => specDash(r.model),
+      })
+    }
+    if (v.params) {
+      cols.push({
+        title: '参数',
+        key: 'params',
+        width: 120,
+        ellipsis: true,
+        render: (_: unknown, r: PreviewTaskRow) => specDash(r.params),
+      })
+    }
+    if (v.sheet) {
+      cols.push({
+        title: 'Sheet',
+        key: 'sheet',
+        dataIndex: 'sheetName',
+        width: 92,
+        render: (cell: string | null) => (cell ? <Tag>{cell}</Tag> : '—'),
+      })
+    }
+    if (v.todayQty) {
+      cols.push({
+        title: '今日完成数量',
+        key: 'todayQty',
+        dataIndex: 'todayQty',
+        width: 110,
+        align: 'right',
+      })
+    }
+    if (v.remainingAfter) {
+      cols.push({
+        title: '确认后剩余',
+        key: 'remainingAfter',
+        dataIndex: 'remainingAfter',
+        width: 100,
+        align: 'right',
+      })
+    }
+    if (v.project) {
+      cols.push({ title: '项目', key: 'project', dataIndex: 'project', width: 120, ellipsis: true })
+    }
+    if (v.responsible) {
+      cols.push({ title: '负责人', key: 'responsible', dataIndex: 'responsible', width: 90, ellipsis: true })
+    }
+    return cols
+  }, [taskPickColVisStep2])
+
+  const taskPickStep2ScrollX = useMemo(() => {
+    let w = 160
+    TASK_PICK_STEP2_KEYS.forEach((k) => {
+      if (taskPickColVisStep2[k]) w += TASK_PICK_STEP2_WIDTH[k]
+    })
+    return Math.max(w, 360)
+  }, [taskPickColVisStep2])
+
+  const taskPickStep1ColPopover = (
+    <Popover
+      placement="bottomRight"
+      title="表格显示列"
+      content={
+        <>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 10, fontSize: 12, maxWidth: 260 }}>
+            「施工内容」「今日完成」始终显示；勾选需要看到的列。设置保存在本机浏览器。
+          </Text>
+          <Checkbox.Group
+            style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+            value={TASK_PICK_STEP1_KEYS.filter((k) => taskPickColVisStep1[k])}
+            onChange={(vals) => {
+              const set = new Set(vals as TaskPickStep1ColKey[])
+              const next = Object.fromEntries(TASK_PICK_STEP1_KEYS.map((k) => [k, set.has(k)])) as Record<
+                TaskPickStep1ColKey,
+                boolean
+              >
+              setTaskPickColVisStep1(next)
+              try {
+                localStorage.setItem(LS_TASK_PICK_COLS_STEP1, JSON.stringify(next))
+              } catch {
+                /* ignore */
+              }
+            }}
+          >
+            {TASK_PICK_STEP1_KEYS.map((k) => (
+              <Checkbox key={k} value={k}>
+                {TASK_PICK_STEP1_LABELS[k]}
+              </Checkbox>
+            ))}
+          </Checkbox.Group>
+        </>
+      }
+    >
+      <Button size="small" icon={<SettingOutlined />}>
+        显示列
+      </Button>
+    </Popover>
+  )
+
+  const taskPickStep2ColPopover = (
+    <Popover
+      placement="bottomRight"
+      title="表格显示列"
+      content={
+        <>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 10, fontSize: 12, maxWidth: 260 }}>
+            「任务名称」始终显示；勾选需要看到的列。设置保存在本机浏览器。
+          </Text>
+          <Checkbox.Group
+            style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+            value={TASK_PICK_STEP2_KEYS.filter((k) => taskPickColVisStep2[k])}
+            onChange={(vals) => {
+              const set = new Set(vals as TaskPickStep2ColKey[])
+              const next = Object.fromEntries(TASK_PICK_STEP2_KEYS.map((k) => [k, set.has(k)])) as Record<
+                TaskPickStep2ColKey,
+                boolean
+              >
+              setTaskPickColVisStep2(next)
+              try {
+                localStorage.setItem(LS_TASK_PICK_COLS_STEP2, JSON.stringify(next))
+              } catch {
+                /* ignore */
+              }
+            }}
+          >
+            {TASK_PICK_STEP2_KEYS.map((k) => (
+              <Checkbox key={k} value={k}>
+                {TASK_PICK_STEP2_LABELS[k]}
+              </Checkbox>
+            ))}
+          </Checkbox.Group>
+        </>
+      }
+    >
+      <Button size="small" icon={<SettingOutlined />}>
+        显示列
+      </Button>
+    </Popover>
+  )
 
   const confirmPickedAndFillChat = () => {
     const tasks = allProgressTasks
@@ -925,72 +1311,59 @@ const ConstructionLogPage: React.FC = () => {
         open={taskPickOpen}
         onCancel={() => { setTaskPickOpen(false); setTaskPickStep(1) }}
         footer={null}
-        width={920}
+        width={1180}
         destroyOnClose
       >
         {taskPickStep === 1 && (
           <>
-            <Space wrap style={{ marginBottom: 12 }}>
-              <Space size={8}>
-                <Text type="secondary">项目名称：</Text>
-                <Select
+            <Space wrap align="center" style={{ marginBottom: 12, width: '100%', justifyContent: 'space-between' }}>
+              <Space wrap>
+                <Space size={8}>
+                  <Text type="secondary">项目名称：</Text>
+                  <Select
+                    allowClear
+                    placeholder="全部"
+                    style={{ width: 200 }}
+                    value={taskPickProjectFilter ?? undefined}
+                    options={projectOptionsForPicker}
+                    onChange={(v) => setTaskPickProjectFilter(v ?? null)}
+                  />
+                </Space>
+                <Space size={8}>
+                  <Text type="secondary">Sheet：</Text>
+                  <Select
+                    allowClear
+                    placeholder="全部"
+                    style={{ width: 160 }}
+                    value={taskPickSheetFilter ?? undefined}
+                    options={sheetOptionsForPicker}
+                    onChange={(v) => setTaskPickSheetFilter(v ?? null)}
+                  />
+                </Space>
+                <Search
                   allowClear
-                  placeholder="全部"
-                  style={{ width: 200 }}
-                  value={taskPickProjectFilter ?? undefined}
-                  options={projectOptionsForPicker}
-                  onChange={(v) => setTaskPickProjectFilter(v ?? null)}
+                  placeholder="服务端模糊搜索：施工内容、负责人、Sheet、品牌型号参数…"
+                  style={{ width: 300 }}
+                  value={taskPickKeyword}
+                  onChange={(e) => setTaskPickKeyword(e.target.value)}
                 />
+                <Text type="secondary">已选 {pickedKeys.length} 条</Text>
+                <Text type="secondary">
+                  当前 {tasksForPicker.length} 条
+                  {allProgressTasks.length !== tasksForPicker.length ? `（全部 ${allProgressTasks.length}）` : ''}
+                </Text>
               </Space>
-              <Space size={8}>
-                <Text type="secondary">Sheet：</Text>
-                <Select
-                  allowClear
-                  placeholder="全部"
-                  style={{ width: 160 }}
-                  value={taskPickSheetFilter ?? undefined}
-                  options={sheetOptionsForPicker}
-                  onChange={(v) => setTaskPickSheetFilter(v ?? null)}
-                />
-              </Space>
-              <Text type="secondary">已选 {pickedKeys.length} 条</Text>
-              <Text type="secondary">共加载 {allProgressTasks.length} 条进度任务</Text>
+              {taskPickStep1ColPopover}
             </Space>
             <Table
               size="small"
               rowKey="id"
               dataSource={tasksForPicker}
+              loading={progressTasksLoading}
               pagination={{ pageSize: 12, showTotal: (t) => `共 ${t} 条` }}
               rowSelection={{ selectedRowKeys: pickedKeys, onChange: (keys) => setPickedKeys(keys) }}
-              columns={[
-                { title: '施工内容', dataIndex: 'content', ellipsis: true },
-                { title: '项目', dataIndex: 'project', width: 140, ellipsis: true },
-                { title: 'Sheet', dataIndex: 'sheetName', width: 100, render: (v: string | null) => (v ? <Tag>{v}</Tag> : '—') },
-                { title: '负责人', dataIndex: 'responsible', width: 90 },
-                { title: '状态', dataIndex: 'status', width: 80, render: (v: string) => PROGRESS_STATUS_MAP[v] ?? v },
-                { title: '总量', dataIndex: 'requiredQty', width: 72, align: 'right' },
-                { title: '已完成', dataIndex: 'doneQty', width: 72, align: 'right' },
-                {
-                  title: '今日完成',
-                  width: 160,
-                  render: (_: unknown, r: ProgressTask) => {
-                    const remaining = Math.max(0, (r.requiredQty ?? 0) - (r.doneQty ?? 0))
-                    const minQty = remaining > 0 ? 1 : 0
-                    return (
-                      <Space>
-                        <InputNumber
-                          min={minQty}
-                          max={remaining}
-                          value={pickedQty[r.id] ?? 0}
-                          onChange={(v) => setPickedQty((prev) => ({ ...prev, [r.id]: Number(v ?? 0) }))}
-                          placeholder="必填，正数"
-                        />
-                        <Text type="secondary">≤{remaining}</Text>
-                      </Space>
-                    )
-                  },
-                },
-              ]}
+              scroll={{ x: taskPickStep1ScrollX }}
+              columns={taskPickStep1TableColumns}
             />
             <div style={{ marginTop: 12, textAlign: 'right' }}>
               <Button onClick={() => setTaskPickOpen(false)}>取消</Button>
@@ -1000,21 +1373,19 @@ const ConstructionLogPage: React.FC = () => {
         )}
         {taskPickStep === 2 && (
           <>
-            <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-              请确认以下任务名称与数量，确认后将填入下方 AI 输入框供后续解析。
-            </Text>
+            <Space align="start" style={{ marginBottom: 12, width: '100%', justifyContent: 'space-between' }} wrap>
+              <Text type="secondary" style={{ flex: 1, minWidth: 200 }}>
+                请确认以下任务名称与数量，确认后将填入下方 AI 输入框供后续解析。
+              </Text>
+              {taskPickStep2ColPopover}
+            </Space>
             <Table
               size="small"
               rowKey="id"
               dataSource={previewRows}
               pagination={false}
-              columns={[
-                { title: '任务名称', dataIndex: 'content', ellipsis: true },
-                { title: '项目', dataIndex: 'project', width: 140, ellipsis: true },
-                { title: 'Sheet', dataIndex: 'sheetName', width: 100, render: (v: string | null) => (v ? <Tag>{v}</Tag> : '—') },
-                { title: '今日完成数量', dataIndex: 'todayQty', width: 110, align: 'right' },
-                { title: '确认后剩余', dataIndex: 'remainingAfter', width: 100, align: 'right' },
-              ]}
+              scroll={{ x: taskPickStep2ScrollX }}
+              columns={taskPickStep2TableColumns}
             />
             <div style={{ marginTop: 12, textAlign: 'right' }}>
               <Button onClick={() => setTaskPickStep(1)}>上一步</Button>

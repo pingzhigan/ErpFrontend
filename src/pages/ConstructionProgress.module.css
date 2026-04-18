@@ -1,0 +1,17 @@
+/* 批量创建：描边常态，悬停时填满 geekblue（与 variant=outlined + color=geekblue 配套） */
+.bulkQuoteOutlined {
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.bulkQuoteOutlined:not(:disabled):hover {
+  background: var(--ant-geekblue-6, #2f54eb) !important;
+  border-color: var(--ant-geekblue-6, #2f54eb) !important;
+  color: var(--ant-colorTextLightSolid, #fff) !important;
+}
+
+.bulkQuoteOutlined:not(:disabled):hover .anticon {
+  color: var(--ant-colorTextLightSolid, #fff) !important;
+}

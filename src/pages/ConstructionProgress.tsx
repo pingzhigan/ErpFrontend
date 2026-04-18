@@ -4,6 +4,14 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  ArrowRightOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  UndoOutlined,
+  UnorderedListOutlined,
+} from '@ant-design/icons'
 import { App, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Progress, Select, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
@@ -14,8 +22,9 @@ import {
   type AssigneeInactiveRef,
   type AssigneeUserRow,
 } from '../utils/constructionAssigneeOptions'
+import styles from './ConstructionProgress.module.css'
 
-const { Title } = Typography
+const { Title, Text } = Typography
 const { Search } = Input
 
 interface ProgressItem {
@@ -30,6 +39,10 @@ interface ProgressItem {
   doneQty: number
   status: string
   sheet_name?: string | null
+  /** 来自关联报价清单（source_product_id），无关联时为 null */
+  brand?: string | null
+  model?: string | null
+  params?: string | null
 }
 
 const STATUS_MAP: Record<string, { color: string; label: string }> = {
@@ -108,6 +121,9 @@ const ConstructionProgressPage: React.FC = () => {
         doneQty: Number(r.doneQty ?? r.done_qty) || 0,
         status: r.status ?? 'not_started',
         sheet_name: r.sheet_name ?? r.sheetName ?? null,
+        brand: r.brand ?? null,
+        model: r.model ?? null,
+        params: r.params ?? null,
       }))
       setData(list)
       setTotal(res.data?.total ?? 0)
@@ -122,6 +138,14 @@ const ConstructionProgressPage: React.FC = () => {
   useEffect(() => {
     fetchList()
   }, [fetchList])
+
+  const resetFilters = useCallback(() => {
+    setProjectFilter(null)
+    setResponsibleFilter(null)
+    setStatusFilter(null)
+    setKeyword('')
+    setPage(1)
+  }, [])
 
   useEffect(() => {
     axios.get<{ list?: { name?: string; project_name?: string }[] }>('/api/construction/projects').then((res) => {
@@ -148,9 +172,29 @@ const ConstructionProgressPage: React.FC = () => {
     return Math.max(0, Math.min(100, pct))
   }
 
+  const trimCell = (v: string | null | undefined) => ((v ?? '').trim() ? (v ?? '').trim() : '—')
+
   const columns: ColumnsType<ProgressItem> = [
-    { title: '施工内容', dataIndex: 'content', width: 260, ellipsis: true },
-    { title: '所属项目', dataIndex: 'project', width: 240, ellipsis: true, sorter: (a, b) => a.project.localeCompare(b.project) },
+    { title: '施工内容', dataIndex: 'content', width: 220, ellipsis: true },
+    {
+      title: '品牌',
+      width: 100,
+      ellipsis: true,
+      render: (_: unknown, r: ProgressItem) => trimCell(r.brand),
+    },
+    {
+      title: '型号',
+      width: 100,
+      ellipsis: true,
+      render: (_: unknown, r: ProgressItem) => trimCell(r.model),
+    },
+    {
+      title: '参数',
+      width: 140,
+      ellipsis: true,
+      render: (_: unknown, r: ProgressItem) => trimCell(r.params),
+    },
+    { title: '所属项目', dataIndex: 'project', width: 200, ellipsis: true, sorter: (a, b) => a.project.localeCompare(b.project) },
     {
       title: '负责人',
       dataIndex: 'responsible',
@@ -202,6 +246,7 @@ const ConstructionProgressPage: React.FC = () => {
           <Button
             type="link"
             size="small"
+            icon={<EditOutlined />}
             onClick={() => {
               void loadAssigneeOptions()
               setEditing(r)
@@ -234,7 +279,7 @@ const ConstructionProgressPage: React.FC = () => {
               }
             }}
           >
-            <Button type="link" danger size="small">
+            <Button type="link" danger size="small" icon={<DeleteOutlined />}>
               删除
             </Button>
           </Popconfirm>
@@ -297,13 +342,33 @@ const ConstructionProgressPage: React.FC = () => {
   }>()
 
   return (
-    <Card>
-      <Space align="baseline" style={{ width: '100%', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={5} style={{ margin: 0 }}>进度管理</Title>
-        <Space>
-          <Button onClick={() => navigate('/construction/progress/bulk-create')}>批量创建（从报价清单）</Button>
+    <Card
+      variant="borderless"
+      style={{
+        borderRadius: 12,
+        boxShadow: 'var(--ant-boxShadowTertiary)',
+        border: '1px solid var(--ant-colorBorderSecondary)',
+        background: 'var(--ant-colorBgContainer)',
+      }}
+      styles={{ body: { padding: '16px 20px 24px' } }}
+    >
+      <Space align="baseline" style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
+        <Title level={5} style={{ margin: 0, color: 'var(--ant-colorTextHeading)' }}>
+          进度管理
+        </Title>
+        <Space wrap>
+          <Button
+            className={styles.bulkQuoteOutlined}
+            color="geekblue"
+            variant="outlined"
+            icon={<UnorderedListOutlined />}
+            onClick={() => navigate('/construction/progress/bulk-create')}
+          >
+            批量创建（从报价清单）
+          </Button>
           <Button
             type="primary"
+            icon={<PlusOutlined />}
             onClick={() => {
               setCreateOpen(true)
               setCreateStep(1)
@@ -318,78 +383,85 @@ const ConstructionProgressPage: React.FC = () => {
         </Space>
       </Space>
 
-      <Card size="small" style={{ marginBottom: 16 }}>
-        <Space wrap size="middle" align="center">
-          <Space size={8} align="center">
-            <Typography.Text type="secondary">项目名称：</Typography.Text>
-            <Select
-              allowClear
-              placeholder="全部"
-              style={{ width: 260 }}
-              value={projectFilter ?? undefined}
-              options={projectOptions}
-              onChange={(v) => { setProjectFilter(v ?? null); setPage(1) }}
-            />
-          </Space>
-          <Space size={8} align="center">
-            <Typography.Text type="secondary">负责人：</Typography.Text>
-            <Select
-              allowClear
-              placeholder="全部"
-              style={{ width: 160 }}
-              value={responsibleFilter ?? undefined}
-              options={responsibleOptions}
-              onChange={(v) => { setResponsibleFilter(v ?? null); setPage(1) }}
-            />
-          </Space>
-          <Space size={8} align="center">
-            <Typography.Text type="secondary">状态：</Typography.Text>
-            <Select
-              allowClear
-              placeholder="全部"
-              style={{ width: 140 }}
-              value={statusFilter ?? undefined}
-              options={Object.entries(STATUS_MAP).map(([value, v]) => ({ value, label: v.label }))}
-              onChange={(v) => { setStatusFilter(v ?? null); setPage(1) }}
-            />
-          </Space>
-          <Search
-            placeholder="模糊搜索：项目名称/负责人/施工内容"
+      <div
+        style={{
+          marginBottom: 12,
+          padding: '8px 12px',
+          background: 'var(--ant-colorPrimaryBg)',
+          borderRadius: 8,
+          border: '1px solid var(--ant-colorPrimaryBorder)',
+          boxShadow: 'var(--ant-boxShadowTertiary)',
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+        }}
+      >
+        <Space wrap size={[8, 6]} align="center">
+          <Select
             allowClear
-            style={{ width: 320 }}
-            value={keyword}
-            onChange={(e) => { setKeyword(e.target.value); setPage(1) }}
-            onSearch={(v) => { setKeyword(v); setPage(1) }}
+            placeholder="项目"
+            style={{ width: 188 }}
+            value={projectFilter ?? undefined}
+            options={projectOptions}
+            onChange={(v) => {
+              setProjectFilter(v ?? null)
+              setPage(1)
+            }}
           />
+          <Select
+            allowClear
+            placeholder="负责人"
+            style={{ width: 132 }}
+            value={responsibleFilter ?? undefined}
+            options={responsibleOptions}
+            onChange={(v) => {
+              setResponsibleFilter(v ?? null)
+              setPage(1)
+            }}
+          />
+          <Select
+            allowClear
+            placeholder="状态"
+            style={{ width: 108 }}
+            value={statusFilter ?? undefined}
+            options={Object.entries(STATUS_MAP).map(([value, v]) => ({ value, label: v.label }))}
+            onChange={(v) => {
+              setStatusFilter(v ?? null)
+              setPage(1)
+            }}
+          />
+          <Search
+            allowClear
+            placeholder="关键词（内容、负责人、规格等）"
+            style={{ width: 220, maxWidth: '100%', background: 'var(--ant-colorBgElevated)' }}
+            value={keyword}
+            onChange={(e) => {
+              setKeyword(e.target.value)
+              setPage(1)
+            }}
+            onSearch={(v) => {
+              setKeyword(v)
+              setPage(1)
+            }}
+          />
+          <Button size="small" variant="outlined" color="default" icon={<UndoOutlined />} onClick={resetFilters}>
+            重置
+          </Button>
         </Space>
-      </Card>
-
-      <Space size="large" style={{ marginBottom: 20 }}>
-        <Card size="small" style={{ minWidth: 120, textAlign: 'center' }}>
-          <div style={{ fontSize: 24, fontWeight: 600, color: 'var(--ant-colorPrimary)' }}>
-            {summary.total}
-          </div>
-          <div style={{ color: 'var(--ant-colorTextSecondary)', fontSize: 12 }}>任务总数</div>
-        </Card>
-        <Card size="small" style={{ minWidth: 120, textAlign: 'center' }}>
-          <div style={{ fontSize: 24, fontWeight: 600, color: 'var(--ant-colorSuccess)' }}>
-            {summary.completed}
-          </div>
-          <div style={{ color: 'var(--ant-colorTextSecondary)', fontSize: 12 }}>已完成</div>
-        </Card>
-        <Card size="small" style={{ minWidth: 120, textAlign: 'center' }}>
-          <div style={{ fontSize: 24, fontWeight: 600, color: 'var(--ant-colorError)' }}>
-            {summary.delayed}
-          </div>
-          <div style={{ color: 'var(--ant-colorTextSecondary)', fontSize: 12 }}>超时</div>
-        </Card>
-        <Card size="small" style={{ minWidth: 120, textAlign: 'center' }}>
-          <div style={{ fontSize: 24, fontWeight: 600, color: 'var(--ant-colorWarning)' }}>
-            {summary.avgProgress}%
-          </div>
-          <div style={{ color: 'var(--ant-colorTextSecondary)', fontSize: 12 }}>平均进度</div>
-        </Card>
-      </Space>
+        <div style={{ fontSize: 12, whiteSpace: 'nowrap', lineHeight: '22px' }}>
+          <Text type="secondary">共 </Text>
+          <Text strong style={{ color: 'var(--ant-colorPrimary)' }}>{summary.total}</Text>
+          <Text type="secondary"> · 完成 </Text>
+          <Text strong style={{ color: 'var(--ant-colorSuccess)' }}>{summary.completed}</Text>
+          <Text type="secondary"> · 超时 </Text>
+          <Text strong style={{ color: 'var(--ant-colorError)' }}>{summary.delayed}</Text>
+          <Text type="secondary"> · 均 </Text>
+          <Text strong style={{ color: 'var(--ant-colorWarning)' }}>{summary.avgProgress}</Text>
+          <Text type="secondary">%</Text>
+        </div>
+      </div>
 
       <Table
         rowKey="id"
@@ -407,7 +479,7 @@ const ConstructionProgressPage: React.FC = () => {
           },
         }}
         size="middle"
-        scroll={{ x: 1400 }}
+        scroll={{ x: 1840 }}
         loading={loading}
       />
 
@@ -458,6 +530,8 @@ const ConstructionProgressPage: React.FC = () => {
             ? [
                 <Button
                   key="cancel"
+                  variant="outlined"
+                  color="default"
                   onClick={() => {
                     setCreateOpen(false)
                     setCreateStep(1)
@@ -468,6 +542,7 @@ const ConstructionProgressPage: React.FC = () => {
                 <Button
                   key="next"
                   type="primary"
+                  icon={<ArrowRightOutlined />}
                   onClick={async () => {
                     const v = await createForm.validateFields(['project'])
                     if (!v.project) return
