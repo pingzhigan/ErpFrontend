@@ -368,8 +368,15 @@ type WorkbenchPushItem = {
 type MaintenancePushItem = {
   id: string
   ts: number
-  eventType: 'minor_work_dispatch' | 'minor_work_closed' | 'maintenance_task_dispatch' | 'maintenance_task_closed'
-  businessType: 'minor_work' | 'maintenance_task'
+  eventType:
+    | 'minor_work_dispatch'
+    | 'minor_work_closed'
+    | 'maintenance_task_dispatch'
+    | 'maintenance_task_closed'
+    | 'construction_log_created'
+    | 'construction_log_updated'
+    | 'construction_log_deleted'
+  businessType: 'minor_work' | 'maintenance_task' | 'construction_log'
   businessId: number
   title: string
   detail?: string

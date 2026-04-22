@@ -404,7 +404,7 @@ const ConstructionLogPage: React.FC = () => {
   const openCreate = () => {
     setCreateOpen(true)
     setCreateStep(1)
-    const initialTemplate = buildTemplate({ weather: 'sunny', workers: 1, project: '' })
+    const initialTemplate = buildTemplate({ weather: 'sunny', project: '' })
     setChatInput(initialTemplate)
     setChatMessages([])
     fetchProjects()
@@ -413,7 +413,7 @@ const ConstructionLogPage: React.FC = () => {
       date: dayjs(),
       weather: 'sunny',
       recorder: current?.recorder ?? defaultRecorder,
-      workers: 1,
+      workers: undefined,
       project: '',
       workContent: '',
       difficulties: '',
@@ -501,7 +501,7 @@ const ConstructionLogPage: React.FC = () => {
     const next = {
       project: parsed.project ?? form.getFieldValue('project') ?? '',
       weather: (parsed.weather ?? form.getFieldValue('weather') ?? 'sunny') as WeatherKey,
-      workers: parsed.workers ?? form.getFieldValue('workers') ?? 0,
+      workers: parsed.workers ?? form.getFieldValue('workers'),
       workContent: parsed.workContent ?? form.getFieldValue('workContent') ?? '',
       difficulties: parsed.difficulties ?? form.getFieldValue('difficulties') ?? '',
       coordination: parsed.coordination ?? form.getFieldValue('coordination') ?? '',
@@ -713,14 +713,27 @@ const ConstructionLogPage: React.FC = () => {
       width: 160,
       render: (_: unknown, r: ProgressTask) => {
         const remaining = Math.max(0, (r.requiredQty ?? 0) - (r.doneQty ?? 0))
-        const minQty = remaining > 0 ? 1 : 0
         return (
           <Space>
             <InputNumber
-              min={minQty}
+              min={0}
               max={remaining}
               value={pickedQty[r.id] ?? 0}
-              onChange={(nv) => setPickedQty((prev) => ({ ...prev, [r.id]: Number(nv ?? 0) }))}
+              onChange={(nv) => {
+                setPickedQty((prev) => {
+                  const nextQty = Number(nv ?? 0)
+                  const prevQty = Number(prev[r.id] ?? 0)
+                  if (prevQty === 0 && nextQty !== 0) {
+                    setPickedKeys((prevKeys) => (
+                      prevKeys.some((k) => Number(k) === r.id) ? prevKeys : [...prevKeys, r.id]
+                    ))
+                  }
+                  if (prevQty !== 0 && nextQty === 0) {
+                    setPickedKeys((prevKeys) => prevKeys.filter((k) => Number(k) !== r.id))
+                  }
+                  return { ...prev, [r.id]: nextQty }
+                })
+              }}
               placeholder="必填，正数"
             />
             <Text type="secondary">≤{remaining}</Text>
