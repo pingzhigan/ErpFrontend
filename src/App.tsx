@@ -365,6 +365,16 @@ type WorkbenchPushItem = {
   linkPath?: string
 }
 
+type MaintenancePushItem = {
+  id: string
+  ts: number
+  eventType: 'minor_work_dispatch' | 'minor_work_closed' | 'maintenance_task_dispatch' | 'maintenance_task_closed'
+  businessType: 'minor_work' | 'maintenance_task'
+  businessId: number
+  title: string
+  detail?: string
+}
+
 const PUSH_CATEGORY_LABEL: Record<WorkbenchPushItem['category'], string> = {
   approval: '审批',
   dingtalk: '钉钉',
@@ -579,6 +589,53 @@ const LayoutWithMenu: React.FC = () => {
     })()
     return () => ac.abort()
   }, [isAuthenticated, user?.token])
+
+  useEffect(() => {
+    if (!isAuthenticated || !user?.token) return
+    const ac = new AbortController()
+    let buf = ''
+    void (async () => {
+      try {
+        const res = await fetch('/api/maintenance/push-stream', {
+          headers: { Authorization: `Bearer ${user.token}` },
+          signal: ac.signal,
+        })
+        if (!res.ok || !res.body) return
+        const reader = res.body.getReader()
+        const dec = new TextDecoder()
+        while (!ac.signal.aborted) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += dec.decode(value, { stream: true })
+          const chunks = buf.split(/\r?\n\r?\n/)
+          buf = chunks.pop() ?? ''
+          for (const rawBlock of chunks) {
+            let eventType = ''
+            let dataStr = ''
+            for (const line of rawBlock.split(/\r?\n/)) {
+              if (line.startsWith('event:')) eventType = line.slice(6).trim()
+              else if (line.startsWith('data:')) dataStr = line.slice(5).trim()
+            }
+            if (eventType !== 'push') continue
+            try {
+              const item = JSON.parse(dataStr) as MaintenancePushItem
+              msg.open({
+                type: 'info',
+                key: `maintenance-push-${item.id}`,
+                content: item.title,
+                duration: 4,
+              })
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    })()
+    return () => ac.abort()
+  }, [isAuthenticated, msg, user?.token])
 
   // 与 path 同步：进入规则/项目相关页时，openKeys 必须包含对应父级，避免子菜单收起
   React.useEffect(() => {
