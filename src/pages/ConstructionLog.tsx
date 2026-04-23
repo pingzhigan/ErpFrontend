@@ -713,11 +713,13 @@ const ConstructionLogPage: React.FC = () => {
       width: 160,
       render: (_: unknown, r: ProgressTask) => {
         const remaining = Math.max(0, (r.requiredQty ?? 0) - (r.doneQty ?? 0))
+        const isFullyDone = remaining <= 0
         return (
           <Space>
             <InputNumber
               min={0}
               max={remaining}
+              disabled={isFullyDone}
               value={pickedQty[r.id] ?? 0}
               onChange={(nv) => {
                 setPickedQty((prev) => {
@@ -736,7 +738,9 @@ const ConstructionLogPage: React.FC = () => {
               }}
               placeholder="必填，正数"
             />
-            <Text type="secondary">≤{remaining}</Text>
+            <Text type={isFullyDone ? 'danger' : 'secondary'}>
+              {`≤${remaining}`}
+            </Text>
           </Space>
         )
       },
