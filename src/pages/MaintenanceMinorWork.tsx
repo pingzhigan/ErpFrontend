@@ -1196,14 +1196,14 @@ const MaintenanceMinorWorkPage: React.FC = () => {
           <Form.Item
             name="project_amount"
             label="工程金额"
-            rules={[{ required: true, message: '请填写工程金额' }]}
+            extra="选填，留空按 0 处理。"
           >
             <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="元" addonAfter="元" />
           </Form.Item>
           <Form.Item
             name="cost_budget"
             label="成本预算"
-            rules={[{ required: true, message: '请填写成本预算' }]}
+            extra="选填，留空按 0 处理。"
           >
             <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="元" addonAfter="元" />
           </Form.Item>
@@ -1268,14 +1268,14 @@ const MaintenanceMinorWorkPage: React.FC = () => {
           <Form.Item
             name="project_amount"
             label="工程金额"
-            rules={[{ required: true, message: '请填写工程金额' }]}
+            extra="选填，留空按 0 处理。"
           >
             <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="元" addonAfter="元" />
           </Form.Item>
           <Form.Item
             name="cost_budget"
             label="成本预算"
-            rules={[{ required: true, message: '请填写成本预算' }]}
+            extra="选填，留空按 0 处理。"
           >
             <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="元" addonAfter="元" />
           </Form.Item>
