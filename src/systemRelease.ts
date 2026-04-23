@@ -16,10 +16,18 @@ export type SystemReleaseEntry = {
 }
 
 /** 当前对外版本号（与更新说明首条 version 建议保持一致） */
-export const APP_VERSION = '2.0.3'
+export const APP_VERSION = '2.0.4'
 
 /** 从新到旧排列；弹窗内按此顺序展示 */
 export const SYSTEM_RELEASE_NOTES: SystemReleaseEntry[] = [
+  {
+    version: '2.0.4',
+    date: '2026-04-23',
+    items: [
+      '消息机器人能力升级：施工日志、零星工程、项目排单支持自动消息通知。',
+      '零星工程新建流程优化：项目金额改为非必填。',
+    ],
+  },
   {
     version: '2.0.3',
     date: '2026-04-18',
