@@ -428,6 +428,7 @@ const MaintenanceScheduleListTable = memo(function MaintenanceScheduleListTable(
   onSubmitDingTalk,
   onDelete,
   dingSubmittingId,
+  assigneeDisplayMap,
 }: {
   list: MaintenanceTask[]
   loading: boolean
@@ -436,6 +437,7 @@ const MaintenanceScheduleListTable = memo(function MaintenanceScheduleListTable(
   onSubmitDingTalk: (id: number) => void | Promise<void>
   onDelete: (id: number) => void | Promise<void>
   dingSubmittingId: number | null
+  assigneeDisplayMap: Map<string, string>
 }) {
   const listNow = useNowEverySecond()
   const columns: ColumnsType<MaintenanceTask> = useMemo(
@@ -475,8 +477,11 @@ const MaintenanceScheduleListTable = memo(function MaintenanceScheduleListTable(
         dataIndex: 'assignee',
         width: 120,
         ellipsis: true,
-        render: (v: string | null) =>
-          sanitizeNullableText(v) ? sanitizeNullableText(v) : <Text type="secondary">待分配</Text>,
+        render: (v: string | null) => {
+          const username = sanitizeNullableText(v)
+          if (!username) return <Text type="secondary">待分配</Text>
+          return assigneeDisplayMap.get(username) ?? username
+        },
       },
       {
         title: '审批',
@@ -529,7 +534,7 @@ const MaintenanceScheduleListTable = memo(function MaintenanceScheduleListTable(
         ),
       },
     ],
-    [listNow, openDetail, onEditClick, onSubmitDingTalk, onDelete, dingSubmittingId],
+    [listNow, openDetail, onEditClick, onSubmitDingTalk, onDelete, dingSubmittingId, assigneeDisplayMap],
   )
 
   return (
@@ -593,6 +598,7 @@ const MaintenanceSchedulePage: React.FC = () => {
     () => buildConstructionAssigneeOptions(assigneeUserRows, assigneeInactiveRef),
     [assigneeUserRows, assigneeInactiveRef],
   )
+  const assigneeDisplayMap = useMemo(() => assigneeLabelMap(assignSelectOptions), [assignSelectOptions])
 
   const closeImgPreview = useCallback(() => {
     setImgPreview((p) => {
@@ -651,7 +657,6 @@ const MaintenanceSchedulePage: React.FC = () => {
   )
 
   useEffect(() => {
-    if (!drawerOpen) return
     let cancelled = false
     setAssigneeUsersLoading(true)
     void axios
@@ -674,7 +679,7 @@ const MaintenanceSchedulePage: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [drawerOpen])
+  }, [])
 
   const loadDetail = useCallback(
     async (id: number) => {
@@ -1116,6 +1121,7 @@ const MaintenanceSchedulePage: React.FC = () => {
         onSubmitDingTalk={submitMtDingTalkFromList}
         onDelete={handleDelete}
         dingSubmittingId={dingSubmittingId}
+        assigneeDisplayMap={assigneeDisplayMap}
       />
 
       <Modal

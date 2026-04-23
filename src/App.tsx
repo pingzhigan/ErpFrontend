@@ -105,6 +105,7 @@ import {
 } from './lazyPages'
 import './App.css'
 import { APP_VERSION, SYSTEM_RELEASE_NOTES } from './systemRelease'
+import { formatUserDisplayName } from './utils/userDisplay'
 
 /** 侧栏品牌图，对应 `frontend/public/logo.png`（Vite 构建时置于站点根路径） */
 const LAYOUT_LOGO_SRC = `${import.meta.env.BASE_URL}logo.png`
@@ -867,6 +868,8 @@ const LayoutWithMenu: React.FC = () => {
     </div>
   )
 
+  const currentUserDisplay = formatUserDisplayName(user?.username, user?.real_name)
+
   return (
     <ProLayout
       title="管理后台"
@@ -987,7 +990,7 @@ const LayoutWithMenu: React.FC = () => {
                 <UserOutlined style={{ marginRight: 4 }} />
               </span>
               <Typography.Text ellipsis style={{ fontSize: 12 }}>
-                {user?.username ?? '—'}
+                {currentUserDisplay}
               </Typography.Text>
             </Space>
             <Space size={4}>

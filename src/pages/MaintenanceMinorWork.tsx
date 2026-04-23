@@ -405,9 +405,9 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     () => buildConstructionAssigneeOptions(handlerUserRows, handlerInactiveRef),
     [handlerUserRows, handlerInactiveRef],
   )
+  const handlerDisplayMap = useMemo(() => assigneeLabelMap(handlerSelectOptions), [handlerSelectOptions])
 
   useEffect(() => {
-    if (!drawerOpen) return
     let cancelled = false
     setHandlerUsersLoading(true)
     void axios
@@ -428,13 +428,13 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [drawerOpen])
+  }, [])
 
   const handlerDisplayLabel = useMemo(() => {
     const h = order?.handler?.trim()
     if (!h) return null
-    return assigneeLabelMap(handlerSelectOptions).get(h) ?? h
-  }, [order?.handler, handlerSelectOptions])
+    return handlerDisplayMap.get(h) ?? h
+  }, [order?.handler, handlerDisplayMap])
 
   const closePreview = useCallback(() => {
     setPreviewBlob((b) => {
@@ -1026,7 +1026,11 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       dataIndex: 'handler',
       width: 112,
       ellipsis: true,
-      render: (v: string | null) => (sanitizeNullableText(v) ? sanitizeNullableText(v) : <Text type="secondary">待分配</Text>),
+      render: (v: string | null) => {
+        const username = sanitizeNullableText(v)
+        if (!username) return <Text type="secondary">待分配</Text>
+        return handlerDisplayMap.get(username) ?? username
+      },
     },
     {
       title: '审批',

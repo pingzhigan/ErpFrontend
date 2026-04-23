@@ -19,6 +19,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { useAuth } from '../auth/AuthContext'
+import { formatUserDisplayName } from '../utils/userDisplay'
 import type { OperationLog } from './Logs'
 import styles from './Dashboard.module.css'
 
@@ -216,12 +217,13 @@ const DashboardPage: React.FC = () => {
   }, [fetchStats])
 
   const quickLinks = quickLinkConfig.filter((item) => hasPermission(item.permission))
+  const welcomeUserDisplay = formatUserDisplayName(user?.username, user?.real_name)
 
   return (
     <div className={styles.wrap}>
       <div className={styles.welcomeBanner}>
         <Title level={3} className={styles.welcomeTitle}>
-          欢迎{user?.username ? `，${user.username}` : ''}
+          欢迎{welcomeUserDisplay !== '—' ? `，${welcomeUserDisplay}` : ''}
         </Title>
         <Text className={styles.welcomeDesc}>
           弱电项目管理：商机与项目、配单与报价成本、库存与 AI 助手、规则与日志一览。
