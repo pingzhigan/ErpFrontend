@@ -1,8 +1,7 @@
 /**
  * 功能名称：施工日志
- * 实现原理与逻辑：记录施工日志，包括项目名称、日期、天气、出勤人数、工作内容、施工难点、帮助协调、备注等。支持按项目名称、日期、天气、出勤人数、工作内容、施工难点、帮助协调、备注等筛选。支持按日期排序。支持导出为 Excel 文件。
+ * 实现原理与逻辑：记录施工日志，包括项目名称、日期、天气、出勤人员（须已绑定钉钉的在职用户）、工作内容、施工难点、帮助协调、备注等。支持按项目、日期、关键字筛选与排序。
  */
-
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Button, Card, Checkbox, DatePicker, Descriptions, Divider, Form, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Typography } from 'antd'
@@ -11,6 +10,7 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import axios from 'axios'
 import { useAuth } from '../auth/AuthContext'
+import { assigneeDisplayNameOnly, assigneeLabelMap, type AssigneeUserRow } from '../utils/constructionAssigneeOptions'
 
 const { Title, Paragraph, Text } = Typography
 const { Search } = Input
@@ -22,6 +22,9 @@ interface LogEntry {
   date: string
   weather: string
   recorder: string
+  /** 出勤人员登录名（与零星工程施工人员同源）；空数组表示历史记录仅有人数 */
+  attendance_staff: string[]
+  /** 兼容旧数据：仅人数、无名单时 >0 */
   workers: number
   workContent: string
   difficulties: string
@@ -50,7 +53,6 @@ type WeatherKey = keyof typeof WEATHER_MAP
 type ParsedLog = {
   project: string
   weather: WeatherKey
-  workers: number
   workContent: string
   difficulties: string
   coordination: string
@@ -61,7 +63,6 @@ type ParsedLog = {
 const LABEL_TO_FIELD: { labels: string[]; field: keyof ParsedLog }[] = [
   { labels: ['项目名称', '项目', '工程', '项目名'], field: 'project' },
   { labels: ['天气'], field: 'weather' },
-  { labels: ['出勤人数', '出勤', '人数'], field: 'workers' },
   { labels: ['工作内容', '施工内容', '今日工作', '内容'], field: 'workContent' },
   { labels: ['施工难点', '难点', '问题', '风险'], field: 'difficulties' },
   { labels: ['帮助协调', '协调', '需协调', '支持'], field: 'coordination' },
@@ -115,9 +116,6 @@ function parseLogFromText(text: string): Partial<ParsedLog> {
     if (field === 'weather') {
       const label = (Object.keys(WEATHER_LABEL_TO_KEY) as (keyof typeof WEATHER_LABEL_TO_KEY)[]).find((k) => value === k || value.includes(k))
       result.weather = (label ? WEATHER_LABEL_TO_KEY[label] : 'sunny') as WeatherKey
-    } else if (field === 'workers') {
-      const n = Number(String(value).replace(/[^\d.]/g, ''))
-      if (Number.isFinite(n)) result.workers = Math.max(0, Math.round(n))
     } else {
       ;(result as Record<string, string>)[field] = value
     }
@@ -131,7 +129,6 @@ function parseLogFromText(text: string): Partial<ParsedLog> {
   return {
     project: result.project ?? '',
     weather: result.weather ?? 'sunny',
-    ...(result.workers != null ? { workers: result.workers } : {}),
     workContent: result.workContent ?? '',
     difficulties: result.difficulties ?? '',
     coordination: result.coordination ?? '',
@@ -142,6 +139,18 @@ function parseLogFromText(text: string): Partial<ParsedLog> {
 function buildTemplate(d: Partial<ParsedLog>) {
   const lines = [`工作内容：${d.workContent ?? ''}`]
   return lines.join('\n')
+}
+
+function formatAttendanceForList(
+  entry: LogEntry,
+  labelByUsername: Map<string, string>,
+): { kind: 'names'; text: string } | { kind: 'legacy'; count: number } {
+  const arr = entry.attendance_staff ?? []
+  if (arr.length > 0) {
+    return { kind: 'names', text: arr.map((u) => labelByUsername.get(u) ?? u).join('、') }
+  }
+  const n = Math.max(0, Number(entry.workers) || 0)
+  return { kind: 'legacy', count: n }
 }
 
 // 进度任务状态展示（不直接显示 not_started 等原始值）
@@ -270,6 +279,8 @@ const ConstructionLogPage: React.FC = () => {
   }, [user])
   const [data, setData] = useState<LogEntry[]>([])
   const [listLoading, setListLoading] = useState(false)
+  const [attendanceUserRows, setAttendanceUserRows] = useState<AssigneeUserRow[]>([])
+  const [attendanceUsersLoading, setAttendanceUsersLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [progressTasksForPicker, setProgressTasksForPicker] = useState<ProgressTask[]>([])
   const [progressTasksLoading, setProgressTasksLoading] = useState(false)
@@ -284,6 +295,7 @@ const ConstructionLogPage: React.FC = () => {
         date: r.date ?? '',
         weather: r.weather ?? 'sunny',
         recorder: r.recorder ?? '',
+        attendance_staff: Array.isArray(r.attendance_staff) ? r.attendance_staff : [],
         workers: Number(r.workers) || 0,
         workContent: r.workContent ?? r.work_content ?? '',
         difficulties: r.difficulties ?? '',
@@ -297,6 +309,36 @@ const ConstructionLogPage: React.FC = () => {
       setListLoading(false)
     }
   }, [headers, msg])
+
+  useEffect(() => {
+    let cancelled = false
+    setAttendanceUsersLoading(true)
+    void axios
+      .get<{ list: AssigneeUserRow[] }>('/api/construction/logs/attendance-user-options', { headers })
+      .then((res) => {
+        if (cancelled) return
+        setAttendanceUserRows(res.data?.list ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setAttendanceUserRows([])
+      })
+      .finally(() => {
+        if (!cancelled) setAttendanceUsersLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [headers])
+
+  const attendanceSelectOptions = useMemo(
+    () =>
+      attendanceUserRows.map((u) => ({
+        value: u.username,
+        label: assigneeDisplayNameOnly(u.username, u.real_name),
+      })),
+    [attendanceUserRows],
+  )
+  const attendanceDisplayByUsername = useMemo(() => assigneeLabelMap(attendanceSelectOptions), [attendanceSelectOptions])
 
   /** 后端列表分页拉全；可选项目、keyword（服务端 LIKE，含施工内容、负责人、Sheet、品牌型号参数等） */
   const fetchProgressTasks = useCallback(
@@ -356,7 +398,7 @@ const ConstructionLogPage: React.FC = () => {
     project: string
     weather: WeatherKey
     recorder: string
-    workers: number
+    attendance_staff: string[]
     workContent: string
     difficulties: string
     coordination: string
@@ -372,7 +414,7 @@ const ConstructionLogPage: React.FC = () => {
     project: string
     weather: WeatherKey
     recorder: string
-    workers: number
+    attendance_staff: string[]
     workContent: string
     difficulties: string
     coordination: string
@@ -413,7 +455,7 @@ const ConstructionLogPage: React.FC = () => {
       date: dayjs(),
       weather: 'sunny',
       recorder: current?.recorder ?? defaultRecorder,
-      workers: undefined,
+      attendance_staff: [],
       project: '',
       workContent: '',
       difficulties: '',
@@ -433,13 +475,12 @@ const ConstructionLogPage: React.FC = () => {
 
   const openEdit = (row: LogEntry) => {
     setEditingEntry(row)
-    const workers = Number(row.workers)
     editForm.setFieldsValue({
       date: row.date ? dayjs(row.date) : dayjs(),
       project: row.project ?? '',
       weather: (row.weather ?? 'sunny') as WeatherKey,
       recorder: row.recorder ?? '',
-      workers: Number.isFinite(workers) && workers >= 1 ? workers : 1,
+      attendance_staff: Array.isArray(row.attendance_staff) ? [...row.attendance_staff] : [],
       workContent: row.workContent ?? '',
       difficulties: row.difficulties ?? '',
       coordination: row.coordination ?? '',
@@ -452,13 +493,15 @@ const ConstructionLogPage: React.FC = () => {
     const v = await editForm.validateFields()
     if (!editingEntry) return
     const date = v.date ? dayjs(v.date).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD')
+    const attendance_staff = Array.isArray(v.attendance_staff) ? v.attendance_staff.map((x) => String(x).trim()).filter(Boolean) : []
     const updated: LogEntry = {
       ...editingEntry,
       project: String(v.project ?? '').trim() || '未命名项目',
       date,
       weather: (v.weather ?? 'sunny') as WeatherKey,
       recorder: String(v.recorder ?? '').trim() || '—',
-      workers: Math.max(1, Number(v.workers ?? 0) || 1),
+      attendance_staff,
+      workers: attendance_staff.length > 0 ? attendance_staff.length : editingEntry.workers,
       workContent: String(v.workContent ?? '').trim() || '—',
       difficulties: String(v.difficulties ?? '').trim() || '无',
       coordination: String(v.coordination ?? '').trim() || '无',
@@ -470,7 +513,7 @@ const ConstructionLogPage: React.FC = () => {
         date: updated.date,
         weather: updated.weather,
         recorder: updated.recorder,
-        workers: updated.workers,
+        attendance_staff,
         work_content: updated.workContent,
         difficulties: updated.difficulties,
         coordination: updated.coordination,
@@ -501,7 +544,6 @@ const ConstructionLogPage: React.FC = () => {
     const next = {
       project: parsed.project ?? form.getFieldValue('project') ?? '',
       weather: (parsed.weather ?? form.getFieldValue('weather') ?? 'sunny') as WeatherKey,
-      workers: parsed.workers ?? form.getFieldValue('workers'),
       workContent: parsed.workContent ?? form.getFieldValue('workContent') ?? '',
       difficulties: parsed.difficulties ?? form.getFieldValue('difficulties') ?? '',
       coordination: parsed.coordination ?? form.getFieldValue('coordination') ?? '',
@@ -939,8 +981,7 @@ const ConstructionLogPage: React.FC = () => {
     setPickedDoneForSave(doneMap)
     const project = form.getFieldValue('project') ?? ''
     const weather = (form.getFieldValue('weather') ?? 'sunny') as WeatherKey
-    const workers = form.getFieldValue('workers') ?? 0
-    const tpl = buildTemplate({ project, weather, workers, workContent, difficulties: '', coordination: '', remark: '' })
+    const tpl = buildTemplate({ project, weather, workContent, difficulties: '', coordination: '', remark: '' })
     setChatInput(tpl)
     form.setFieldsValue({ workContent })
     setTaskPickOpen(false)
@@ -949,13 +990,19 @@ const ConstructionLogPage: React.FC = () => {
   }
 
   const filtered = keyword
-    ? data.filter(
-        (r) =>
+    ? data.filter((r) => {
+        const staff = r.attendance_staff ?? []
+        const attByName = staff.map((u) => attendanceDisplayByUsername.get(u) ?? u).join(' ')
+        const attByUser = staff.join(' ')
+        return (
           r.project.includes(keyword) ||
           r.workContent.includes(keyword) ||
           r.recorder.includes(keyword) ||
-          r.date.includes(keyword)
-      )
+          r.date.includes(keyword) ||
+          attByName.includes(keyword) ||
+          attByUser.includes(keyword)
+        )
+      })
     : data
 
   const columns: ColumnsType<LogEntry> = [
@@ -969,10 +1016,20 @@ const ConstructionLogPage: React.FC = () => {
     },
     { title: '记录人', dataIndex: 'recorder', width: 100 },
     {
-      title: '出勤人数',
-      dataIndex: 'workers',
-      width: 100,
-      render: (v: number) => <Tag color="blue">{v} 人</Tag>,
+      title: '出勤人员',
+      key: 'attendance',
+      width: 220,
+      render: (_: unknown, r: LogEntry) => {
+        const disp = formatAttendanceForList(r, attendanceDisplayByUsername)
+        if (disp.kind === 'names') {
+          return <span style={{ fontSize: 13 }}>{disp.text}</span>
+        }
+        return (
+          <Tag color="default">
+            历史 {disp.count > 0 ? `${disp.count} 人（仅人数）` : '—'}
+          </Tag>
+        )
+      },
     },
     {
       title: '工作内容',
@@ -1037,7 +1094,13 @@ const ConstructionLogPage: React.FC = () => {
               {current.project}
             </Descriptions.Item>
             <Descriptions.Item label="记录人">{current.recorder}</Descriptions.Item>
-            <Descriptions.Item label="出勤人数">{current.workers} 人</Descriptions.Item>
+            <Descriptions.Item label="出勤人员">
+              {(() => {
+                const disp = formatAttendanceForList(current, attendanceDisplayByUsername)
+                if (disp.kind === 'names') return disp.text
+                return disp.count > 0 ? `历史记录 ${disp.count} 人（仅人数，无名单）` : '—'
+              })()}
+            </Descriptions.Item>
             <Descriptions.Item label="施工内容" span={2}>
               <Paragraph style={{ whiteSpace: 'pre-line', margin: 0 }}>
                 {current.workContent}
@@ -1078,21 +1141,30 @@ const ConstructionLogPage: React.FC = () => {
               <Input placeholder="记录人" style={{ width: 140 }} />
             </Form.Item>
             <Form.Item
-              name="workers"
-              label="出勤人数"
+              name="attendance_staff"
+              label="出勤人员"
               rules={[
-                { required: true, message: '请填写出勤人数' },
+                { required: true, message: '请选择出勤人员' },
                 {
                   validator: (_, val) => {
-                    const n = Number(val)
-                    if (val === '' || val == null || !Number.isFinite(n) || n < 1)
-                      return Promise.reject(new Error('出勤人数至少为 1'))
+                    const arr = Array.isArray(val) ? val.filter(Boolean) : []
+                    if (arr.length < 1) return Promise.reject(new Error('至少选择一名出勤人员'))
                     return Promise.resolve()
                   },
                 },
               ]}
+              extra="须为在职且已绑定钉钉 userId 的用户（与零星工程施工人员一致）。"
             >
-              <Input type="number" min={1} style={{ width: 120 }} />
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="至少选择一名"
+                options={attendanceSelectOptions}
+                loading={attendanceUsersLoading}
+                style={{ minWidth: 280 }}
+              />
             </Form.Item>
           </Space>
           <Form.Item name="project" label="项目名称" rules={[{ required: true }]}>
@@ -1123,13 +1195,16 @@ const ConstructionLogPage: React.FC = () => {
           const date = v.date ? dayjs(v.date).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD')
           const project = String(v.project ?? '').trim() || '未命名项目'
           const workContent = String(v.workContent ?? '').trim() || '—'
+          const attendance_staff = Array.isArray(v.attendance_staff)
+            ? v.attendance_staff.map((x) => String(x).trim()).filter(Boolean)
+            : []
           try {
             const res = await axios.post('/api/construction/logs', {
               project_name: project,
               date,
               weather,
               recorder: String(v.recorder ?? '').trim() || '—',
-              workers: Math.max(1, Number(v.workers ?? 0) || 1),
+              attendance_staff,
               work_content: workContent,
               difficulties: String(v.difficulties ?? '').trim() || null,
               coordination: String(v.coordination ?? '').trim() || null,
@@ -1141,7 +1216,8 @@ const ConstructionLogPage: React.FC = () => {
               date,
               weather,
               recorder: String(v.recorder ?? '').trim() || '—',
-              workers: Math.max(1, Number(v.workers ?? 0) || 1),
+              attendance_staff,
+              workers: attendance_staff.length,
               workContent,
               difficulties: String(v.difficulties ?? '').trim() || '无',
               coordination: String(v.coordination ?? '').trim() || '无',
@@ -1265,22 +1341,30 @@ const ConstructionLogPage: React.FC = () => {
                   <Input placeholder="例如：张三" />
                 </Form.Item>
                 <Form.Item
-                  name="workers"
-                  label="出勤人数"
-                  style={{ width: 160 }}
+                  name="attendance_staff"
+                  label="出勤人员"
+                  style={{ minWidth: 280 }}
                   rules={[
-                    { required: true, message: '请填写出勤人数' },
+                    { required: true, message: '请选择出勤人员' },
                     {
                       validator: (_, val) => {
-                        const n = Number(val)
-                        if (val === '' || val == null || !Number.isFinite(n) || n < 1)
-                          return Promise.reject(new Error('出勤人数至少为 1'))
+                        const arr = Array.isArray(val) ? val.filter(Boolean) : []
+                        if (arr.length < 1) return Promise.reject(new Error('至少选择一名出勤人员'))
                         return Promise.resolve()
                       },
                     },
                   ]}
+                  extra="须已绑定钉钉 userId。"
                 >
-                  <Input type="number" min={1} />
+                  <Select
+                    mode="multiple"
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="至少选择一名"
+                    options={attendanceSelectOptions}
+                    loading={attendanceUsersLoading}
+                  />
                 </Form.Item>
               </Space>
 

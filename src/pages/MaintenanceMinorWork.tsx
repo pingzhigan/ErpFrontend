@@ -1,6 +1,6 @@
 /**
  * 维护管理 - 零星工程
- * 业务流：① 分配/转派执行人 → ② 派单确认（计划与说明）→ ③ 跟踪 → ④ 闭环。分配与转派写入跟踪时间线（track_kind）。
+ * 业务流：① 分配/转派负责人与施工人员 → ② 派单确认（计划与说明）→ ③ 跟踪 → ④ 闭环。分配与转派写入跟踪时间线（track_kind）。
  */
 import {
   FormOutlined,
@@ -12,13 +12,15 @@ import {
   EyeOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
-import type { ColumnsType } from 'antd/es/table'
+import type { ColumnType, ColumnsType } from 'antd/es/table'
 import {
   Alert,
   App,
   Button,
   Card,
+  Checkbox,
   DatePicker,
   Descriptions,
   Drawer,
@@ -27,6 +29,7 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Popover,
   Progress,
   Select,
   Slider,
@@ -48,12 +51,13 @@ import { auditGateAllowsEditWhenNotApproving } from '../utils/auditGateUi'
 import {
   assigneeLabelMap,
   buildConstructionAssigneeOptions,
+  labelForAssigneeUsername,
   type AssigneeInactiveRef,
   type AssigneeUserRow,
 } from '../utils/constructionAssigneeOptions'
 import { parseDueAtHourPickerValue } from '../utils/dueAtHourPickerParse'
 
-const { Title, Text, Paragraph } = Typography
+const { Title, Text, Paragraph, Link } = Typography
 const { Search } = Input
 const { TextArea } = Input
 
@@ -99,8 +103,11 @@ function minorWorkOpsUnlocked(audit: GateAudit | undefined): boolean {
 
 /** 抽屉展示：登记/创建时间（与列表 created_at 一致） */
 function formatMinorWorkCreatedAt(s: string | null | undefined): string {
-  if (!s?.trim()) return '—'
-  const v = s.trim().replace('T', ' ')
+  const t = String(s ?? '').trim()
+  if (!t) return '—'
+  const l = t.toLowerCase()
+  if (l === 'null' || l === 'undefined') return '—'
+  const v = t.replace('T', ' ')
   return v.length >= 16 ? v.slice(0, 16) : v.slice(0, 10)
 }
 
@@ -145,6 +152,8 @@ type MinorWorkOrder = {
   content: string
   status: MinorWorkStatus
   handler: string | null
+  /** 施工人员登录名（多选） */
+  construction_workers?: string[]
   plan_date: string | null
   finish_date: string | null
   progress: number
@@ -166,10 +175,29 @@ function minorWorkHasHandler(order: MinorWorkOrder | null | undefined): boolean 
   return Boolean(order?.handler?.trim())
 }
 
-/** 待派单阶段：审批通过且已分配执行人时，可填计划/说明、上传派单附件 */
-function minorWorkDispatchFormEnabled(audit: GateAudit | undefined, order: MinorWorkOrder | null): boolean {
-  return Boolean(order && order.status === 'pending' && minorWorkOpsUnlocked(audit) && minorWorkHasHandler(order))
+function minorWorkHasConstructionWorkers(order: MinorWorkOrder | null | undefined): boolean {
+  return Array.isArray(order?.construction_workers) && order.construction_workers.length > 0
 }
+
+/** 负责人 + 至少一名施工人员均已指定 */
+function minorWorkAssignComplete(order: MinorWorkOrder | null | undefined): boolean {
+  return minorWorkHasHandler(order) && minorWorkHasConstructionWorkers(order)
+}
+
+/** 待派单阶段：审批通过且已分配负责人与施工人员时，可填计划/说明、上传派单附件 */
+function minorWorkDispatchFormEnabled(audit: GateAudit | undefined, order: MinorWorkOrder | null): boolean {
+  return Boolean(order && order.status === 'pending' && minorWorkOpsUnlocked(audit) && minorWorkAssignComplete(order))
+}
+
+const constructionWorkersRequiredRules = [
+  { required: true, message: '请选择施工人员' },
+  {
+    validator: (_: unknown, v: unknown) =>
+      Array.isArray(v) && v.length > 0
+        ? Promise.resolve()
+        : Promise.reject(new Error('至少选择一名施工人员')),
+  },
+]
 
 type MinorWorkTrack = {
   id: number
@@ -222,8 +250,8 @@ function validateDispatchImageFile(file: File): string | null {
   if (!okExt && !file.type.startsWith('image/')) {
     return '仅支持 jpg、png、gif、webp、bmp、tiff 等图片'
   }
-  if (file.size > 8 * 1024 * 1024) {
-    return '图片大小不能超过 8MB'
+  if (file.size > 2 * 1024 * 1024) {
+    return '图片大小不能超过 2MB'
   }
   return null
 }
@@ -233,6 +261,86 @@ const STATUS_MAP: Record<MinorWorkStatus, { color: string; label: string }> = {
   dispatched: { color: 'blue', label: '已派单' },
   in_progress: { color: 'processing', label: '执行中' },
   closed: { color: 'success', label: '已闭环' },
+}
+
+/** 列表列显示（不含「操作」，操作列始终展示）；持久化 localStorage */
+const MINOR_WORK_LIST_COLS_LS = 'minor_work.list.columns.v1'
+
+type MinorWorkListColKey =
+  | 'code'
+  | 'title'
+  | 'customer'
+  | 'due_at'
+  | 'project_amount'
+  | 'cost_budget'
+  | 'progress'
+  | 'status'
+  | 'handler'
+  | 'construction_workers'
+  | 'audit'
+
+const MINOR_WORK_LIST_COL_ORDER: MinorWorkListColKey[] = [
+  'code',
+  'title',
+  'customer',
+  'due_at',
+  'project_amount',
+  'cost_budget',
+  'progress',
+  'status',
+  'handler',
+  'construction_workers',
+  'audit',
+]
+
+const MINOR_WORK_LIST_COL_LABEL: Record<MinorWorkListColKey, string> = {
+  code: '编号',
+  title: '事项标题',
+  customer: '客户名称',
+  due_at: '截止时间',
+  project_amount: '工程金额',
+  cost_budget: '成本预算',
+  progress: '进度',
+  status: '状态',
+  handler: '负责人',
+  construction_workers: '施工人员',
+  audit: '审批',
+}
+
+const MINOR_WORK_LIST_COL_WIDTH: Record<MinorWorkListColKey, number> = {
+  code: 118,
+  title: 200,
+  customer: 120,
+  due_at: 208,
+  project_amount: 120,
+  cost_budget: 120,
+  progress: 140,
+  status: 88,
+  handler: 112,
+  construction_workers: 160,
+  audit: 100,
+}
+
+function defaultMinorWorkListColVisibility(): Record<MinorWorkListColKey, boolean> {
+  return Object.fromEntries(MINOR_WORK_LIST_COL_ORDER.map((k) => [k, true])) as Record<MinorWorkListColKey, boolean>
+}
+
+function loadMinorWorkListColVisibility(): Record<MinorWorkListColKey, boolean> {
+  const allOn = defaultMinorWorkListColVisibility()
+  try {
+    const raw = localStorage.getItem(MINOR_WORK_LIST_COLS_LS)
+    if (!raw?.trim()) return allOn
+    const p = JSON.parse(raw) as unknown
+    if (!p || typeof p !== 'object') return allOn
+    const o = p as Record<string, unknown>
+    const out = { ...allOn }
+    for (const k of MINOR_WORK_LIST_COL_ORDER) {
+      if (typeof o[k] === 'boolean') out[k] = o[k]
+    }
+    return out
+  } catch {
+    return allOn
+  }
 }
 
 function formatMoney(n: number | null | undefined) {
@@ -254,6 +362,16 @@ function formatDueAtText(v: string | null | undefined): string {
   if (!s) return '—'
   const d = dayjs(s)
   return d.isValid() ? s : '—'
+}
+
+/** 抽屉各阶段文案兜底：过滤 null/字面量 null，空则显示占位符 */
+function drawerDisplayText(v: string | null | undefined, empty = '—'): string {
+  return sanitizeNullableText(v) ?? empty
+}
+
+function drawerProgressPercent(n: number | null | undefined): number {
+  if (n == null || !Number.isFinite(Number(n))) return 0
+  return Math.min(100, Math.max(0, Math.round(Number(n))))
 }
 
 function stepCurrent(status: MinorWorkStatus): number {
@@ -342,8 +460,8 @@ const MinorTrackAttachmentRow: React.FC<{
         )}
       </button>
       <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
-        <Text ellipsis style={{ fontSize: 12, maxWidth: 240 }} title={att.file_name}>
-          {att.file_name}
+        <Text ellipsis style={{ fontSize: 12, maxWidth: 240 }} title={drawerDisplayText(att.file_name, '') || undefined}>
+          {drawerDisplayText(att.file_name, '（无文件名）')}
         </Text>
         <Space size={4}>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => void onOpenPreview(att)}>
@@ -398,8 +516,10 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   const [dingSubmittingId, setDingSubmittingId] = useState<number | null>(null)
   const [drawerDingSubmitting, setDrawerDingSubmitting] = useState(false)
   const [handlerUserRows, setHandlerUserRows] = useState<AssigneeUserRow[]>([])
+  const [constructionWorkerRows, setConstructionWorkerRows] = useState<AssigneeUserRow[]>([])
   const [handlerInactiveRef, setHandlerInactiveRef] = useState<AssigneeInactiveRef[]>([])
   const [handlerUsersLoading, setHandlerUsersLoading] = useState(false)
+  const [listColVisibility, setListColVisibility] = useState(loadMinorWorkListColVisibility)
 
   const handlerSelectOptions = useMemo(
     () => buildConstructionAssigneeOptions(handlerUserRows, handlerInactiveRef),
@@ -407,14 +527,47 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   )
   const handlerDisplayMap = useMemo(() => assigneeLabelMap(handlerSelectOptions), [handlerSelectOptions])
 
+  const constructionWorkerSelectOptions = useMemo(
+    () =>
+      constructionWorkerRows.map((u) => ({
+        value: u.username,
+        label: labelForAssigneeUsername(u.username, u.real_name),
+      })),
+    [constructionWorkerRows],
+  )
+  const constructionWorkerDisplayMap = useMemo(
+    () => assigneeLabelMap(constructionWorkerSelectOptions),
+    [constructionWorkerSelectOptions],
+  )
+
+  /** 列表施工人员列：只展示姓名（无姓名则用登录名），不含「姓名 (登录名)」格式 */
+  const userRealNameOnlyMap = useMemo(() => {
+    const m = new Map<string, string>()
+    const put = (username: string, realName: string | null | undefined) => {
+      const un = username.trim()
+      if (!un) return
+      const rn = (realName ?? '').trim()
+      m.set(un, rn || un)
+    }
+    for (const u of handlerUserRows) put(u.username, u.real_name)
+    for (const u of constructionWorkerRows) put(u.username, u.real_name)
+    for (const ir of handlerInactiveRef) put(ir.username, ir.real_name)
+    return m
+  }, [handlerUserRows, constructionWorkerRows, handlerInactiveRef])
+
   useEffect(() => {
     let cancelled = false
     setHandlerUsersLoading(true)
     void axios
-      .get<{ list: AssigneeUserRow[]; inactive_referenced?: AssigneeInactiveRef[] }>('/api/minor-works/handler-user-options')
+      .get<{
+        list: AssigneeUserRow[]
+        inactive_referenced?: AssigneeInactiveRef[]
+        construction_worker_user_options?: AssigneeUserRow[]
+      }>('/api/minor-works/handler-user-options')
       .then((res) => {
         if (cancelled) return
         setHandlerUserRows(res.data?.list ?? [])
+        setConstructionWorkerRows(res.data?.construction_worker_user_options ?? [])
         setHandlerInactiveRef(res.data?.inactive_referenced ?? [])
       })
       .catch(() => {
@@ -431,10 +584,21 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   }, [])
 
   const handlerDisplayLabel = useMemo(() => {
-    const h = order?.handler?.trim()
+    const h = sanitizeNullableText(order?.handler)
     if (!h) return null
     return handlerDisplayMap.get(h) ?? h
   }, [order?.handler, handlerDisplayMap])
+
+  const constructionWorkersDisplay = useMemo(() => {
+    const arr = order?.construction_workers ?? []
+    if (!arr.length) return null
+    const line = arr
+      .map((u) => sanitizeNullableText(u))
+      .filter((x): x is string => Boolean(x))
+      .map((u) => constructionWorkerDisplayMap.get(u) ?? handlerDisplayMap.get(u) ?? u)
+      .join('、')
+    return line || null
+  }, [order?.construction_workers, constructionWorkerDisplayMap, handlerDisplayMap])
 
   const closePreview = useCallback(() => {
     setPreviewBlob((b) => {
@@ -475,7 +639,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       const d = parseDueAtHourPickerValue(rec.due_at)
       editForm.setFieldsValue({
         title: rec.title,
-        customer_name: rec.customer_name ?? '',
+        customer_name: sanitizeNullableText(rec.customer_name) ?? '',
         due_at: d,
         project_amount: rec.project_amount ?? undefined,
         cost_budget: rec.cost_budget ?? undefined,
@@ -504,10 +668,11 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         const planDefault = parseMinorPlanDateDefault(o.plan_date, o.due_at)
         assignHandlerForm.setFieldsValue({
           handler: o.handler?.trim() ? o.handler.trim() : undefined,
+          construction_workers: Array.isArray(o.construction_workers) ? o.construction_workers : [],
         })
         dispatchForm.setFieldsValue({
           plan_date: planDefault,
-          dispatch_note: o.dispatch_note ?? '',
+          dispatch_note: sanitizeNullableText(o.dispatch_note) ?? '',
         })
         const nextProg = Math.min(100, Math.max(5, o.progress + 10))
         setTrackProgress(nextProg)
@@ -539,10 +704,10 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     }
   }, [drawerOpen, detailId, loadDetail])
 
-  const openDetail = (r: MinorWorkOrder) => {
+  const openDetail = useCallback((r: MinorWorkOrder) => {
     setDetailId(r.id)
     setDrawerOpen(true)
-  }
+  }, [])
 
   const handleCreate = async () => {
     try {
@@ -561,8 +726,8 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       const st = createRes.data?.audit?.audit_status
       msg.success(
         gate && st === 'draft'
-          ? '已创建。审批通过后请先在详情「分配任务」指定执行人，再确认派单与跟踪'
-          : '已创建。请先在详情「分配任务」指定执行人，再确认派单',
+          ? '已创建。审批通过后请先在详情「分配任务」指定负责人与施工人员，再确认派单与跟踪'
+          : '已创建。请先在详情「分配任务」指定负责人与施工人员，再确认派单',
       )
       setCreateOpen(false)
       createForm.resetFields()
@@ -619,12 +784,18 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         order: MinorWorkOrder
         tracks: MinorWorkTrack[]
         dispatchAttachments?: DispatchAttachmentDto[]
-      }>(`/api/minor-works/${detailId}/assign-handler`, { handler: v.handler })
+      }>(`/api/minor-works/${detailId}/assign-handler`, {
+        handler: v.handler,
+        construction_workers: Array.isArray(v.construction_workers) ? v.construction_workers : [],
+      })
       const no = res.data.order
       setOrder({ ...no, audit: no.audit })
       setTracks(res.data.tracks ?? [])
       setDispatchAttachments(res.data.dispatchAttachments ?? [])
-      assignHandlerForm.setFieldsValue({ handler: no.handler?.trim() || undefined })
+      assignHandlerForm.setFieldsValue({
+        handler: no.handler?.trim() || undefined,
+        construction_workers: Array.isArray(no.construction_workers) ? no.construction_workers : [],
+      })
       msg.success(wasHandler ? '已转派' : '已分配')
       fetchList()
     } catch (e: unknown) {
@@ -637,8 +808,8 @@ const MaintenanceMinorWorkPage: React.FC = () => {
 
   const confirmDispatch = async () => {
     if (!detailId || !order) return
-    if (!minorWorkHasHandler(order)) {
-      msg.warning('请先分配执行人')
+    if (!minorWorkAssignComplete(order)) {
+      msg.warning('请先分配负责人，并至少指定一名施工人员')
       return
     }
     try {
@@ -648,7 +819,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         plan_date: v.plan_date ? dayjs(v.plan_date).startOf('hour').format('YYYY-MM-DD HH:00') : null,
         dispatch_note: (v.dispatch_note ?? '').trim(),
       })
-      msg.success('派单已确认，执行人可进行跟踪记录')
+      msg.success('派单已确认，负责人可进行跟踪记录')
       await loadDetail(detailId)
       fetchList()
     } catch (e: unknown) {
@@ -709,35 +880,41 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     }
   }
 
-  const submitMinorWorkDingTalk = async (id: number, fromDrawer?: boolean) => {
-    if (fromDrawer) setDrawerDingSubmitting(true)
-    else setDingSubmittingId(id)
-    try {
-      await axios.post(`/api/minor-works/${id}/dingtalk/submit`)
-      msg.success('已提交钉钉审批，请在钉钉中处理流程')
-      if (fromDrawer && detailId === id) await loadDetail(id)
-      fetchList()
-    } catch (e: unknown) {
-      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '提交失败')
-    } finally {
-      setDingSubmittingId(null)
-      setDrawerDingSubmitting(false)
-    }
-  }
-
-  const handleDelete = async (id: number) => {
-    try {
-      await axios.delete(`/api/minor-works/${id}`)
-      msg.success('已删除')
-      if (detailId === id) {
-        closePreview()
-        setDrawerOpen(false)
+  const submitMinorWorkDingTalk = useCallback(
+    async (id: number, fromDrawer?: boolean) => {
+      if (fromDrawer) setDrawerDingSubmitting(true)
+      else setDingSubmittingId(id)
+      try {
+        await axios.post(`/api/minor-works/${id}/dingtalk/submit`)
+        msg.success('已提交钉钉审批，请在钉钉中处理流程')
+        if (fromDrawer && detailId === id) await loadDetail(id)
+        fetchList()
+      } catch (e: unknown) {
+        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '提交失败')
+      } finally {
+        setDingSubmittingId(null)
+        setDrawerDingSubmitting(false)
       }
-      fetchList()
-    } catch (e: unknown) {
-      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '删除失败')
-    }
-  }
+    },
+    [msg, detailId, loadDetail, fetchList],
+  )
+
+  const handleDelete = useCallback(
+    async (id: number) => {
+      try {
+        await axios.delete(`/api/minor-works/${id}`)
+        msg.success('已删除')
+        if (detailId === id) {
+          closePreview()
+          setDrawerOpen(false)
+        }
+        fetchList()
+      } catch (e: unknown) {
+        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '删除失败')
+      }
+    },
+    [msg, detailId, closePreview, fetchList],
+  )
 
   const openDispatchPreview = useCallback(
     async (att: DispatchAttachmentDto) => {
@@ -844,8 +1021,8 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       if (!detailId) return
       if (!minorWorkDispatchFormEnabled(order?.audit, order ?? null)) {
         msg.warning(
-          !minorWorkHasHandler(order)
-            ? '请先分配执行人'
+          !minorWorkAssignComplete(order)
+            ? '请先分配负责人，并至少指定一名施工人员'
             : '须先在钉钉完成审批通过后，方可上传派单图片',
         )
         return
@@ -947,9 +1124,14 @@ const MaintenanceMinorWorkPage: React.FC = () => {
 
   const dispatchAttachmentColumns: ColumnsType<DispatchAttachmentDto> = useMemo(
     () => [
-      { title: '文件名', dataIndex: 'file_name', ellipsis: true },
+      {
+        title: '文件名',
+        dataIndex: 'file_name',
+        ellipsis: true,
+        render: (v: string) => drawerDisplayText(v, '（无文件名）'),
+      },
       { title: '大小', width: 88, render: (_, r) => formatFileSize(Number(r.file_size) || 0) },
-      { title: '上传时间', width: 156, dataIndex: 'created_at' },
+      { title: '上传时间', width: 156, render: (_, r) => formatMinorWorkCreatedAt(r.created_at) },
       {
         title: '操作',
         width: order?.status === 'pending' ? 228 : 168,
@@ -976,76 +1158,153 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     [order, openDispatchPreview, downloadDispatchAttachment, deleteDispatchAttachment],
   )
 
+  const updateListColVisibility = useCallback((key: MinorWorkListColKey, checked: boolean) => {
+    setListColVisibility((prev) => {
+      const next = { ...prev, [key]: checked }
+      try {
+        localStorage.setItem(MINOR_WORK_LIST_COLS_LS, JSON.stringify(next))
+      } catch {
+        /* 忽略存储失败 */
+      }
+      return next
+    })
+  }, [])
+
+  const resetListColVisibility = useCallback(() => {
+    const next = defaultMinorWorkListColVisibility()
+    setListColVisibility(next)
+    try {
+      localStorage.setItem(MINOR_WORK_LIST_COLS_LS, JSON.stringify(next))
+    } catch {
+      /* 忽略 */
+    }
+  }, [])
+
   const filtered = useMemo(() => list, [list])
 
-  const columns: ColumnsType<MinorWorkOrder> = [
-    { title: '编号', dataIndex: 'code', width: 118 },
-    { title: '事项标题', dataIndex: 'title', ellipsis: true, width: 200 },
-    {
-      title: '客户名称',
-      width: 120,
-      ellipsis: true,
-      render: (_, r) => sanitizeNullableText(r.customer_name) || sanitizeNullableText(r.applicant) || '—',
-    },
-    {
-      title: '截止时间',
-      dataIndex: 'due_at',
-      width: 208,
-      render: (v: string | null, r: MinorWorkOrder) =>
-        r.status === 'closed' ? formatDueAtText(v) : <DueCountdownCell dueAt={v} now={listNow} />,
-    },
-    {
-      title: '工程金额',
-      width: 120,
-      align: 'right',
-      render: (_: unknown, r: MinorWorkOrder) => formatMoney(r.project_amount),
-    },
-    {
-      title: '成本预算',
-      width: 120,
-      align: 'right',
-      render: (_: unknown, r: MinorWorkOrder) => formatMoney(r.cost_budget),
-    },
-    {
-      title: '进度',
-      dataIndex: 'progress',
-      width: 140,
-      render: (v: number) => <Progress percent={v} size="small" />,
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 88,
-      render: (v: MinorWorkStatus) => {
-        const s = STATUS_MAP[v] ?? { color: 'default', label: v }
-        return <Tag color={s.color}>{s.label}</Tag>
+  const listTableScrollX = useMemo(() => {
+    let w = 168
+    for (const k of MINOR_WORK_LIST_COL_ORDER) {
+      if (listColVisibility[k]) w += MINOR_WORK_LIST_COL_WIDTH[k]
+    }
+    return Math.max(w, 640)
+  }, [listColVisibility])
+
+  const columns: ColumnsType<MinorWorkOrder> = useMemo(() => {
+    const dataColsOrdered: { key: MinorWorkListColKey; col: ColumnType<MinorWorkOrder> }[] = [
+      {
+        key: 'code',
+        col: { title: '编号', dataIndex: 'code', width: MINOR_WORK_LIST_COL_WIDTH.code },
       },
-    },
-    {
-      title: '执行人',
-      dataIndex: 'handler',
-      width: 112,
-      ellipsis: true,
-      render: (v: string | null) => {
-        const username = sanitizeNullableText(v)
-        if (!username) return <Text type="secondary">待分配</Text>
-        return handlerDisplayMap.get(username) ?? username
+      {
+        key: 'title',
+        col: { title: '事项标题', dataIndex: 'title', ellipsis: true, width: MINOR_WORK_LIST_COL_WIDTH.title },
       },
-    },
-    {
-      title: '审批',
-      key: 'audit',
-      width: 100,
-      render: (_: unknown, r: MinorWorkOrder) => {
-        const lab = minorWorkAuditLabel(r.audit)
-        return lab ? <Tag color={lab.color}>{lab.text}</Tag> : <Text type="secondary">—</Text>
+      {
+        key: 'customer',
+        col: {
+          title: '客户名称',
+          width: MINOR_WORK_LIST_COL_WIDTH.customer,
+          ellipsis: true,
+          render: (_: unknown, r: MinorWorkOrder) =>
+            sanitizeNullableText(r.customer_name) || sanitizeNullableText(r.applicant) || '—',
+        },
       },
-    },
-    {
+      {
+        key: 'due_at',
+        col: {
+          title: '截止时间',
+          dataIndex: 'due_at',
+          width: MINOR_WORK_LIST_COL_WIDTH.due_at,
+          render: (v: string | null, r: MinorWorkOrder) =>
+            r.status === 'closed' ? formatDueAtText(v) : <DueCountdownCell dueAt={v} now={listNow} />,
+        },
+      },
+      {
+        key: 'project_amount',
+        col: {
+          title: '工程金额',
+          width: MINOR_WORK_LIST_COL_WIDTH.project_amount,
+          align: 'right',
+          render: (_: unknown, r: MinorWorkOrder) => formatMoney(r.project_amount),
+        },
+      },
+      {
+        key: 'cost_budget',
+        col: {
+          title: '成本预算',
+          width: MINOR_WORK_LIST_COL_WIDTH.cost_budget,
+          align: 'right',
+          render: (_: unknown, r: MinorWorkOrder) => formatMoney(r.cost_budget),
+        },
+      },
+      {
+        key: 'progress',
+        col: {
+          title: '进度',
+          dataIndex: 'progress',
+          width: MINOR_WORK_LIST_COL_WIDTH.progress,
+          render: (v: number) => <Progress percent={v} size="small" />,
+        },
+      },
+      {
+        key: 'status',
+        col: {
+          title: '状态',
+          dataIndex: 'status',
+          width: MINOR_WORK_LIST_COL_WIDTH.status,
+          render: (v: MinorWorkStatus) => {
+            const s = STATUS_MAP[v] ?? { color: 'default', label: v }
+            return <Tag color={s.color}>{s.label}</Tag>
+          },
+        },
+      },
+      {
+        key: 'handler',
+        col: {
+          title: '负责人',
+          dataIndex: 'handler',
+          width: MINOR_WORK_LIST_COL_WIDTH.handler,
+          ellipsis: true,
+          render: (v: string | null) => {
+            const username = sanitizeNullableText(v)
+            if (!username) return <Text type="secondary">待分配</Text>
+            return handlerDisplayMap.get(username) ?? username
+          },
+        },
+      },
+      {
+        key: 'construction_workers',
+        col: {
+          title: '施工人员',
+          width: MINOR_WORK_LIST_COL_WIDTH.construction_workers,
+          ellipsis: true,
+          render: (_: unknown, r: MinorWorkOrder) => {
+            const arr = r.construction_workers ?? []
+            if (!arr.length) return <Text type="secondary">待分配</Text>
+            return arr.map((u) => userRealNameOnlyMap.get(u) ?? u).join('、')
+          },
+        },
+      },
+      {
+        key: 'audit',
+        col: {
+          title: '审批',
+          key: 'audit',
+          width: MINOR_WORK_LIST_COL_WIDTH.audit,
+          render: (_: unknown, r: MinorWorkOrder) => {
+            const lab = minorWorkAuditLabel(r.audit)
+            return lab ? <Tag color={lab.color}>{lab.text}</Tag> : <Text type="secondary">—</Text>
+          },
+        },
+      },
+    ]
+
+    const actionCol: ColumnType<MinorWorkOrder> = {
       title: '操作',
       width: 168,
       fixed: 'right',
-      render: (_, r) => (
+      render: (_: unknown, r: MinorWorkOrder) => (
         <Space size={[4, 4]} wrap>
           <a onClick={() => openDetail(r)}>办理</a>
           {canEditMinorWorkBasicInfo(r) ? (
@@ -1062,29 +1321,45 @@ const MaintenanceMinorWorkPage: React.FC = () => {
           {canSubmitMinorWorkDingTalk(r.audit) ? (
             <a
               onClick={() => void submitMinorWorkDingTalk(r.id)}
-              style={{ opacity: dingSubmittingId === r.id ? 0.5 : 1, pointerEvents: dingSubmittingId === r.id ? 'none' : undefined }}
+              style={{
+                opacity: dingSubmittingId === r.id ? 0.5 : 1,
+                pointerEvents: dingSubmittingId === r.id ? 'none' : undefined,
+              }}
             >
               {dingSubmittingId === r.id ? '提交中…' : '提交钉钉审批'}
             </a>
           ) : null}
           {canDeleteMinorWorkWithAudit(r.audit) ? (
-            <Popconfirm title="确定删除该条？" onConfirm={() => handleDelete(r.id)}>
-              <a style={{ color: 'var(--ant-colorError)' }}>删除</a>
+            <Popconfirm title="确定删除该条？" onConfirm={() => void handleDelete(r.id)}>
+              <Link type="danger">删除</Link>
             </Popconfirm>
           ) : (
-            <Text type="secondary">删除</Text>
+            <Text type="danger" style={{ opacity: 0.45 }}>
+              删除
+            </Text>
           )}
         </Space>
       ),
-    },
-  ]
+    }
+
+    return [...dataColsOrdered.filter((d) => listColVisibility[d.key]).map((d) => d.col), actionCol]
+  }, [
+    listColVisibility,
+    listNow,
+    handlerDisplayMap,
+    userRealNameOnlyMap,
+    dingSubmittingId,
+    openDetail,
+    submitMinorWorkDingTalk,
+    handleDelete,
+  ])
 
   const workflowSteps = (
     <Steps
       current={order ? stepCurrent(order.status) : 0}
       items={[
-        { title: '分配与派单', description: '执行人、计划与说明', icon: <FormOutlined /> },
-        { title: '执行人跟踪与说明', description: '过程记录与进度', icon: <SendOutlined /> },
+        { title: '分配与派单', description: '负责人、施工人员、计划与说明', icon: <FormOutlined /> },
+        { title: '负责人跟踪与说明', description: '过程记录与进度', icon: <SendOutlined /> },
         { title: '闭环', description: '完成确认', icon: <CheckCircleOutlined /> },
       ]}
       style={{ marginBottom: 28 }}
@@ -1099,7 +1374,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
           零星工程
         </Title>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          须先「分配任务」指定执行人，再确认派单（计划与说明）；已派单后可「转派」。流程：分配 → 派单确认 → 跟踪 → 闭环
+          须先「分配任务」指定负责人与施工人员，再确认派单（计划与说明）；已派单后可「转派」。流程：分配 → 派单确认 → 跟踪 → 闭环
         </Text>
         <Search
           placeholder="搜索编号/标题/客户/内容/截止时间"
@@ -1110,6 +1385,31 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建事项
         </Button>
+        <Popover
+          title="列表列显示"
+          trigger="click"
+          placement="bottomLeft"
+          content={
+            <div style={{ maxWidth: 280 }}>
+              <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                {MINOR_WORK_LIST_COL_ORDER.map((colKey) => (
+                  <Checkbox
+                    key={colKey}
+                    checked={listColVisibility[colKey]}
+                    onChange={(e) => updateListColVisibility(colKey, e.target.checked)}
+                  >
+                    {MINOR_WORK_LIST_COL_LABEL[colKey]}
+                  </Checkbox>
+                ))}
+                <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={resetListColVisibility}>
+                  恢复默认（全部显示）
+                </Button>
+              </Space>
+            </div>
+          }
+        >
+          <Button icon={<SettingOutlined />}>列设置</Button>
+        </Popover>
       </Space>
 
       <Table
@@ -1119,7 +1419,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         loading={loading}
         pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }}
         size="middle"
-        scroll={{ x: 1360 }}
+        scroll={{ x: listTableScrollX }}
       />
 
       <Modal
@@ -1283,7 +1583,11 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       </Modal>
 
       <Drawer
-        title={order ? `${order.code} · ${order.title}` : '办理'}
+        title={
+          order
+            ? `${drawerDisplayText(order.code, '—')} · ${drawerDisplayText(order.title, '—')}`
+            : '办理'
+        }
         open={drawerOpen}
         onClose={() => {
           closePreview()
@@ -1322,16 +1626,16 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                 showIcon
                 style={{ marginBottom: 16 }}
                 message="已启用钉钉审批"
-                description="须审批通过后方可确认派单、上传派单图片、填写跟踪记录与闭环。请先完成「分配任务」指定执行人。请在列表或上方提交钉钉流程。"
+                description="须审批通过后方可确认派单、上传派单图片、填写跟踪记录与闭环。请先完成「分配任务」指定负责人与施工人员。请在列表或上方提交钉钉流程。"
               />
             ) : null}
-            {order.status === 'pending' && !minorWorkHasHandler(order) && canEditMinorWorkWithAudit(order.audit) ? (
+            {order.status === 'pending' && !minorWorkAssignComplete(order) && canEditMinorWorkWithAudit(order.audit) ? (
               <Alert
                 type="info"
                 showIcon
                 style={{ marginBottom: 16 }}
                 message="请先分配任务"
-                description="在下方选择执行人并点击「确认分配」后，方可填写计划、派单说明与上传附件，并确认派单。"
+                description="在下方选择负责人、施工人员（至少一人）并保存后，方可填写计划、派单说明与上传附件，并确认派单。"
               />
             ) : null}
             <Descriptions
@@ -1348,7 +1652,9 @@ const MaintenanceMinorWorkPage: React.FC = () => {
               contentStyle={{ minWidth: 0, wordBreak: 'break-word', verticalAlign: 'top' }}
             >
               <Descriptions.Item label="状态">
-                <Tag color={STATUS_MAP[order.status]?.color}>{STATUS_MAP[order.status]?.label}</Tag>
+                <Tag color={STATUS_MAP[order.status]?.color ?? 'default'}>
+                  {STATUS_MAP[order.status]?.label ?? drawerDisplayText(String(order.status ?? ''), '未知')}
+                </Tag>
               </Descriptions.Item>
               {order.audit?.dingtalk_gate ? (
                 <Descriptions.Item label="钉钉审批">
@@ -1359,33 +1665,40 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                 </Descriptions.Item>
               ) : null}
               <Descriptions.Item label="进度">
-                <Progress percent={order.progress} size="small" />
+                <Progress percent={drawerProgressPercent(order.progress)} size="small" />
               </Descriptions.Item>
               <Descriptions.Item label="客户名称">
-                {order.customer_name || order.applicant || '—'}
+                {sanitizeNullableText(order.customer_name) || sanitizeNullableText(order.applicant) || '—'}
               </Descriptions.Item>
-              <Descriptions.Item label="截止时间">{order.due_at ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="截止时间">{formatDueAtText(order.due_at)}</Descriptions.Item>
               <Descriptions.Item label="工程金额">{formatMoney(order.project_amount)}</Descriptions.Item>
               <Descriptions.Item label="成本预算">{formatMoney(order.cost_budget)}</Descriptions.Item>
               <Descriptions.Item label="登记日期">{formatMinorWorkCreatedAt(order.created_at)}</Descriptions.Item>
-              <Descriptions.Item label="执行人">
+              <Descriptions.Item label="负责人">
                 {handlerDisplayLabel ?? <Text type="secondary">待分配</Text>}
               </Descriptions.Item>
-              <Descriptions.Item label="计划完成">{order.plan_date ?? '—'}</Descriptions.Item>
-              <Descriptions.Item label="实际完成">{order.finish_date ?? '—'}</Descriptions.Item>
-              <Descriptions.Item label="事项内容" span={2}>
-                <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{order.content}</Paragraph>
+              <Descriptions.Item label="施工人员" span={2}>
+                {constructionWorkersDisplay ?? <Text type="secondary">待分配</Text>}
               </Descriptions.Item>
-              {order.precautions ? (
-                <Descriptions.Item label="注意事项" span={2}>
-                  <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{order.precautions}</Paragraph>
+              <Descriptions.Item label="计划完成">{formatDueAtText(order.plan_date)}</Descriptions.Item>
+              <Descriptions.Item label="实际完成">{formatDueAtText(order.finish_date)}</Descriptions.Item>
+              <Descriptions.Item label="事项内容" span={2}>
+                <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+                  {drawerDisplayText(order.content, '—')}
+                </Paragraph>
+              </Descriptions.Item>
+              <Descriptions.Item label="注意事项" span={2}>
+                <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+                  {drawerDisplayText(order.precautions, '—')}
+                </Paragraph>
+              </Descriptions.Item>
+              {order.status !== 'pending' ? (
+                <Descriptions.Item label="派单说明" span={2}>
+                  <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+                    {drawerDisplayText(order.dispatch_note, '—')}
+                  </Paragraph>
                 </Descriptions.Item>
               ) : null}
-              {order.dispatch_note && (
-                <Descriptions.Item label="派单说明" span={2}>
-                  {order.dispatch_note}
-                </Descriptions.Item>
-              )}
               {order.status !== 'pending' && dispatchAttachments.length > 0 ? (
                 <Descriptions.Item label="派单图片附件" span={2}>
                   <Table
@@ -1397,11 +1710,13 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                   />
                 </Descriptions.Item>
               ) : null}
-              {order.close_note && (
+              {order.status === 'closed' ? (
                 <Descriptions.Item label="闭环说明" span={2}>
-                  {order.close_note}
+                  <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+                    {drawerDisplayText(order.close_note, '—')}
+                  </Paragraph>
                 </Descriptions.Item>
-              )}
+              ) : null}
             </Descriptions>
 
             {(order.status === 'dispatched' || order.status === 'in_progress') &&
@@ -1413,12 +1728,28 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                 extra={<Text type="secondary" style={{ fontSize: 12 }}>改派后写入跟踪时间线</Text>}
               >
                 <Form form={assignHandlerForm} layout="vertical" style={{ maxWidth: 420 }}>
-                  <Form.Item name="handler" label="执行人" rules={[{ required: true, message: '请选择执行人' }]}>
+                  <Form.Item name="handler" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
                     <Select
                       showSearch
                       optionFilterProp="label"
                       placeholder="在职系统用户"
                       options={handlerSelectOptions}
+                      loading={handlerUsersLoading}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    name="construction_workers"
+                    label="施工人员"
+                    rules={constructionWorkersRequiredRules}
+                    extra="必选，至少一名；须已绑定钉钉的在职用户。"
+                  >
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="至少选择一名施工人员"
+                      options={constructionWorkerSelectOptions}
                       loading={handlerUsersLoading}
                     />
                   </Form.Item>
@@ -1432,7 +1763,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
             {order.status === 'pending' && canEditMinorWorkWithAudit(order.audit) ? (
               <Card
                 size="small"
-                title={minorWorkHasHandler(order) ? '分配任务（可调整执行人）' : '分配任务'}
+                title={minorWorkHasHandler(order) ? '分配任务（可调整负责人）' : '分配任务'}
                 style={{ marginBottom: 24 }}
                 extra={
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -1441,12 +1772,28 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                 }
               >
                 <Form form={assignHandlerForm} layout="vertical" style={{ maxWidth: 420 }}>
-                  <Form.Item name="handler" label="执行人" rules={[{ required: true, message: '请选择执行人' }]}>
+                  <Form.Item name="handler" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
                     <Select
                       showSearch
                       optionFilterProp="label"
                       placeholder="在职系统用户"
                       options={handlerSelectOptions}
+                      loading={handlerUsersLoading}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    name="construction_workers"
+                    label="施工人员"
+                    rules={constructionWorkersRequiredRules}
+                    extra="必选，至少一名；须已绑定钉钉 userId 的在职用户。"
+                  >
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="至少选择一名施工人员"
+                      options={constructionWorkerSelectOptions}
                       loading={handlerUsersLoading}
                     />
                   </Form.Item>
@@ -1464,7 +1811,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                     name="plan_date"
                     label="计划完成日期"
                     rules={[{ required: true, message: '请选择计划完成时间（精确到小时）' }]}
-                    extra="默认与上方「截止时间」一致（含整点时刻），可按需调整。须已分配执行人且审批通过后方可编辑。"
+                    extra="默认与上方「截止时间」一致（含整点时刻），可按需调整。须已分配负责人与施工人员且审批通过后方可编辑。"
                   >
                     <DatePicker
                       style={{ width: '100%' }}
@@ -1544,7 +1891,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
             )}
 
             {order.status !== 'pending' && (
-              <Card title="③ 执行人跟踪与说明" style={{ marginBottom: 24 }}>
+              <Card title="③ 负责人跟踪与说明" style={{ marginBottom: 24 }}>
                 {tracks.length === 0 ? (
                   <Text type="secondary">暂无跟踪记录，请填写下方说明并保存。</Text>
                 ) : (
@@ -1555,14 +1902,22 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                         tk === 'assign' ? 'green' : tk === 'reassign' ? 'cyan' : 'blue'
                       const kindLabel = TRACK_KIND_LABEL[tk] ?? '跟踪'
                       const tAtts = trackAttachmentsByTrackId[t.id] ?? []
+                      const by = sanitizeNullableText(t.created_by)
+                      const byLabel = by ? ` · ${handlerDisplayMap.get(by) ?? by}` : ''
+                      const prog =
+                        t.progress_after != null && Number.isFinite(Number(t.progress_after))
+                          ? ` · 进度 ${Math.round(Number(t.progress_after))}%`
+                          : ''
                       return (
                         <Timeline.Item key={t.id} color={lineColor}>
                           <Text type="secondary" style={{ fontSize: 12 }}>
-                            {t.created_at} · {kindLabel}
-                            {t.created_by ? ` · ${t.created_by}` : ''}
-                            {t.progress_after != null ? ` · 进度 ${t.progress_after}%` : ''}
+                            {formatMinorWorkCreatedAt(t.created_at)} · {kindLabel}
+                            {byLabel}
+                            {prog}
                           </Text>
-                          <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{t.content}</div>
+                          <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>
+                            {drawerDisplayText(t.content, '（无说明）')}
+                          </div>
                           {tAtts.length > 0 && detailId != null ? (
                             <Space wrap size={[12, 12]} style={{ marginTop: 8 }}>
                               {tAtts.map((att) => (
@@ -1624,7 +1979,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
 
             {order.status === 'closed' && (
               <Card title="③ 闭环">
-                <Text>本单已于 {order.finish_date ?? '—'} 闭环。</Text>
+                <Text>本单已于 {formatDueAtText(order.finish_date)} 闭环。</Text>
               </Card>
             )}
           </>

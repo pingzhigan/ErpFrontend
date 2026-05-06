@@ -7,6 +7,7 @@ import { Button, Card, Descriptions, Divider, List, Modal, Space, Tag, Typograph
 import { useNavigate, useParams } from 'react-router-dom'
 import axios from 'axios'
 import { useAuth } from '../auth/AuthContext'
+import { assigneeDisplayNameOnly, assigneeLabelMap, type AssigneeUserRow } from '../utils/constructionAssigneeOptions'
 
 const { Title, Text } = Typography
 
@@ -62,6 +63,17 @@ const ConstructionProjectDetailPage: React.FC = () => {
   /** 非 null 时表示打开「该日」超时列表弹窗 */
   const [timeoutsModalDay, setTimeoutsModalDay] = useState<string | null>(null)
   const [timeoutDetail, setTimeoutDetail] = useState<TimeoutTimelineData | null>(null)
+  const [attendanceUserRows, setAttendanceUserRows] = useState<AssigneeUserRow[]>([])
+
+  const attendanceSelectOptions = useMemo(
+    () =>
+      attendanceUserRows.map((u) => ({
+        value: u.username,
+        label: assigneeDisplayNameOnly(u.username, u.real_name),
+      })),
+    [attendanceUserRows],
+  )
+  const attendanceDisplayByUsername = useMemo(() => assigneeLabelMap(attendanceSelectOptions), [attendanceSelectOptions])
 
   const { timeoutItems, mainTimelineItems } = useMemo(() => {
     const timeouts: TimelineItem[] = []
@@ -115,6 +127,21 @@ const ConstructionProjectDetailPage: React.FC = () => {
       setTimelineLoading(false)
     }
   }, [projectId, headers])
+
+  useEffect(() => {
+    let cancelled = false
+    void axios
+      .get<{ list: AssigneeUserRow[] }>('/api/construction/logs/attendance-user-options', { headers })
+      .then((res) => {
+        if (!cancelled) setAttendanceUserRows(res.data?.list ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setAttendanceUserRows([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [headers])
 
   useEffect(() => {
     fetchProject()
@@ -214,8 +241,16 @@ const ConstructionProjectDetailPage: React.FC = () => {
                     date: string
                     recorder: string
                     workers: number
+                    attendance_staff?: string[]
+                    attendance_line?: string
                     work_content: string
                   }
+                  const att = Array.isArray(d.attendance_staff) ? d.attendance_staff : []
+                  const attendanceText =
+                    att.length > 0
+                      ? att.map((u) => attendanceDisplayByUsername.get(u) ?? u).join('、')
+                      : (d.attendance_line ?? '').trim() ||
+                        (Number(d.workers) > 0 ? `历史 ${d.workers} 人（仅人数）` : '')
                   return (
                     <div key={`log-${d.id}`}>
                       {idx > 0 || timeoutsByDay.length > 0 ? <Divider style={{ margin: '12px 0' }} /> : null}
@@ -231,7 +266,8 @@ const ConstructionProjectDetailPage: React.FC = () => {
                         <Text strong>{d.date}</Text>
                         <Tag color="blue">施工日志</Tag>
                         <Text type="secondary">
-                          记录人：{d.recorder}，出勤 {d.workers} 人
+                          记录人：{d.recorder}
+                          {attendanceText ? `，出勤：${attendanceText}` : ''}
                         </Text>
                       </div>
                       <div

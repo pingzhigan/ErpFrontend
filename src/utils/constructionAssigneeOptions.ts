@@ -14,6 +14,13 @@ export function labelForAssigneeUsername(username: string, realName: string | nu
   return rn ? `${rn} (${username})` : username
 }
 
+/** 列表/详情等仅展示姓名；无维护姓名时用登录名（不附带括号用户名） */
+export function assigneeDisplayNameOnly(username: string, realName: string | null | undefined): string {
+  const un = String(username ?? '').trim()
+  const rn = (realName ?? '').trim()
+  return rn || un
+}
+
 function inactiveTag(s: AssigneeInactiveRef['status']): string {
   if (s === 'missing') return '（非系统用户）'
   if (s === 'deleted') return '（已删除）'
