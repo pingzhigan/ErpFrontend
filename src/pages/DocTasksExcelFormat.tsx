@@ -1493,25 +1493,45 @@ const DocTasksExcelFormatPage: React.FC = () => {
     }
   }
 
-  /** 下载标准行为 Excel（表单 POST 触发，由服务端 Content-Disposition filename* 提供中文名，避免乱码） */
-  const handleDownloadExcel = () => {
+  const downloadExcelByApi = useCallback(
+    async (items: Record<string, unknown>[], filename: string) => {
+      if (!token) throw new Error('登录已失效，请重新登录后下载')
+      const res = await fetch('/api/docs/export-list-excel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ items, filename }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error((err as { message?: string })?.message || '导出失败')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    },
+    [token],
+  )
+
+  /** 下载标准行为 Excel（使用 Authorization 头，移除 query access_token） */
+  const handleDownloadExcel = async () => {
     if (!rowsForSave.length) return
     const items = rowsForSave.map(({ _key, ...rest }) => rest)
     const baseName = parseResults[0]?.fileName?.replace(/\.[^.]+$/, '') ?? '清单'
     const filename = `智能格式化_${baseName}.xlsx`
-    const form = document.createElement('form')
-    form.method = 'POST'
-    form.action = `/api/docs/export-list-excel${token ? `?access_token=${encodeURIComponent(token)}` : ''}`
-    form.target = '_blank'
-    form.style.display = 'none'
-    const input = document.createElement('input')
-    input.name = 'payload'
-    input.value = JSON.stringify({ items, filename })
-    form.appendChild(input)
-    document.body.appendChild(form)
-    form.submit()
-    form.remove()
-    msg.success('已发起下载，请查看浏览器下载项')
+    try {
+      await downloadExcelByApi(items, filename)
+      msg.success('已发起下载，请查看浏览器下载项')
+    } catch (e: unknown) {
+      const err = e as { message?: string }
+      msg.error(err?.message || '导出失败')
+    }
   }
 
   /** 拉取已保存的结构化文件列表（与项目维护一致） */
@@ -1554,33 +1574,28 @@ const DocTasksExcelFormatPage: React.FC = () => {
     }
   }, [headers, msg, fetchExportedFiles])
 
-  const handleExportFileAsExcel = useCallback(async (filename: string) => {
-    try {
-      const res = await axios.get<{ items?: Record<string, unknown>[] }>(`/api/structured-exports/${encodeURIComponent(filename)}`, { headers })
-      const items = res.data?.items ?? []
-      if (!items.length) {
-        msg.warning('该文件无数据，无法导出')
-        return
+  const handleExportFileAsExcel = useCallback(
+    async (filename: string) => {
+      try {
+        const res = await axios.get<{ items?: Record<string, unknown>[] }>(
+          `/api/structured-exports/${encodeURIComponent(filename)}`,
+          { headers },
+        )
+        const items = res.data?.items ?? []
+        if (!items.length) {
+          msg.warning('该文件无数据，无法导出')
+          return
+        }
+        const excelName = filename.replace(/\.json$/i, '') + '.xlsx'
+        await downloadExcelByApi(items, excelName)
+        msg.success('已发起下载，请查看浏览器下载项')
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { message?: string } }; message?: string }
+        msg.error(err?.response?.data?.message || err?.message || '导出失败')
       }
-      const excelName = filename.replace(/\.json$/i, '') + '.xlsx'
-      const form = document.createElement('form')
-      form.method = 'POST'
-      form.action = `/api/docs/export-list-excel${token ? `?access_token=${encodeURIComponent(token)}` : ''}`
-      form.target = '_blank'
-      form.style.display = 'none'
-      const input = document.createElement('input')
-      input.name = 'payload'
-      input.value = JSON.stringify({ items, filename: excelName })
-      form.appendChild(input)
-      document.body.appendChild(form)
-      form.submit()
-      form.remove()
-      msg.success('已发起下载，请查看浏览器下载项')
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { message?: string } } }
-      msg.error(err?.response?.data?.message || '导出失败')
-    }
-  }, [headers, token, msg])
+    },
+    [headers, msg, downloadExcelByApi],
+  )
 
   const handleReloadFile = useCallback(async (filename: string, fileProjectName: string, _listType: 'cost' | 'quote') => {
     try {

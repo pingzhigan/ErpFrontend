@@ -16,10 +16,22 @@ export type SystemReleaseEntry = {
 }
 
 /** 当前对外版本号（与更新说明首条 version 建议保持一致） */
-export const APP_VERSION = '2.0.4'
+export const APP_VERSION = '2.0.5'
 
 /** 从新到旧排列；弹窗内按此顺序展示 */
 export const SYSTEM_RELEASE_NOTES: SystemReleaseEntry[] = [
+  {
+    version: '2.0.5',
+    date: '2026-05-06',
+    items: [
+      '文档清单导出链路安全升级',
+      '零星工程和施工日志支持“施工人员”的添加与编辑，并支持“派单”与“闭环”操作。',
+      '小程序端增加了“施工日志”与“零星工程”的的施工人员添加和编辑功能',
+      '小程序端增加了一些对照片的一些处理',
+      '施工日志支持导出为EXCEL表格',
+      '修复了一些问题',
+    ],
+  },
   {
     version: '2.0.4',
     date: '2026-04-23',
