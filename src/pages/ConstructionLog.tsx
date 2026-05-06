@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Button, Card, Checkbox, DatePicker, Descriptions, Divider, Form, Input, InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Typography } from 'antd'
-import { FileTextOutlined, SettingOutlined } from '@ant-design/icons'
+import { DownloadOutlined, FileTextOutlined, SettingOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import axios from 'axios'
@@ -14,6 +14,8 @@ import { assigneeDisplayNameOnly, assigneeLabelMap, type AssigneeUserRow } from 
 
 const { Title, Paragraph, Text } = Typography
 const { Search } = Input
+const EXPORT_EXCEL_MAX_ROWS = 2000
+const SERVER_PAGING_THRESHOLD = 1000
 
 // 施工日志接口
 interface LogEntry {
@@ -279,36 +281,72 @@ const ConstructionLogPage: React.FC = () => {
   }, [user])
   const [data, setData] = useState<LogEntry[]>([])
   const [listLoading, setListLoading] = useState(false)
+  const [projectFilter, setProjectFilter] = useState<string | null>(null)
+  const [serverPaging, setServerPaging] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [total, setTotal] = useState(0)
   const [attendanceUserRows, setAttendanceUserRows] = useState<AssigneeUserRow[]>([])
   const [attendanceUsersLoading, setAttendanceUsersLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [progressTasksForPicker, setProgressTasksForPicker] = useState<ProgressTask[]>([])
   const [progressTasksLoading, setProgressTasksLoading] = useState(false)
+  const [exportingExcel, setExportingExcel] = useState(false)
 
-  const fetchLogs = useCallback(async () => {
+  const mapApiLogEntry = useCallback((r: any): LogEntry => ({
+    id: r.id,
+    project: r.project ?? r.project_name ?? '',
+    date: r.date ?? '',
+    weather: r.weather ?? 'sunny',
+    recorder: r.recorder ?? '',
+    attendance_staff: Array.isArray(r.attendance_staff) ? r.attendance_staff : [],
+    workers: Number(r.workers) || 0,
+    workContent: r.workContent ?? r.work_content ?? '',
+    difficulties: r.difficulties ?? '',
+    coordination: r.coordination ?? '',
+    remark: r.remark ?? '',
+  }), [])
+
+  const fetchLogs = useCallback(async (opts?: { page?: number; pageSize?: number }) => {
+    const targetPage = Number(opts?.page || 1) || 1
+    const targetPageSize = Number(opts?.pageSize || pageSize) || 10
     setListLoading(true)
     try {
-      const res = await axios.get<{ list: any[] }>('/api/construction/logs', { headers })
-      const list = (res.data?.list ?? []).map((r: any) => ({
-        id: r.id,
-        project: r.project ?? r.project_name ?? '',
-        date: r.date ?? '',
-        weather: r.weather ?? 'sunny',
-        recorder: r.recorder ?? '',
-        attendance_staff: Array.isArray(r.attendance_staff) ? r.attendance_staff : [],
-        workers: Number(r.workers) || 0,
-        workContent: r.workContent ?? r.work_content ?? '',
-        difficulties: r.difficulties ?? '',
-        coordination: r.coordination ?? '',
-        remark: r.remark ?? '',
-      }))
+      const detectParams: Record<string, string | number> = { page: 1, pageSize: SERVER_PAGING_THRESHOLD }
+      if (projectFilter) detectParams.project_name = projectFilter
+      if (keyword.trim()) detectParams.keyword = keyword.trim()
+      const detectRes = await axios.get<{ list: any[]; total?: number }>('/api/construction/logs', {
+        headers,
+        params: detectParams,
+      })
+      const detectTotal = Number(detectRes.data?.total || 0)
+      const shouldServerPage = detectTotal > SERVER_PAGING_THRESHOLD
+      setServerPaging(shouldServerPage)
+      setTotal(detectTotal)
+
+      const params: Record<string, string | number> = shouldServerPage
+        ? { page: targetPage, pageSize: targetPageSize }
+        : { page: 1, pageSize: SERVER_PAGING_THRESHOLD }
+      if (projectFilter) params.project_name = projectFilter
+      if (keyword.trim()) params.keyword = keyword.trim()
+      const res = await axios.get<{ list: any[]; total?: number }>('/api/construction/logs', {
+        headers,
+        params,
+      })
+      const list = (res.data?.list ?? []).map((r: any) => mapApiLogEntry(r))
       setData(list)
+      if (shouldServerPage) {
+        setPage(targetPage)
+        setPageSize(targetPageSize)
+      } else {
+        setPage(1)
+      }
     } catch (e: any) {
       msg.error(e?.response?.data?.message ?? '加载日志失败')
     } finally {
       setListLoading(false)
     }
-  }, [headers, msg])
+  }, [headers, keyword, mapApiLogEntry, msg, pageSize, projectFilter])
 
   useEffect(() => {
     let cancelled = false
@@ -387,8 +425,8 @@ const ConstructionLogPage: React.FC = () => {
   )
 
   useEffect(() => {
-    fetchLogs()
-  }, [fetchLogs])
+    void fetchLogs({ page: 1, pageSize })
+  }, [fetchLogs, pageSize])
   const [detailOpen, setDetailOpen] = useState(false)
   const [current, setCurrent] = useState<LogEntry | null>(null)
   const [editOpen, setEditOpen] = useState(false)
@@ -989,21 +1027,61 @@ const ConstructionLogPage: React.FC = () => {
     msg.success('已填入下方 AI 输入框，可继续编辑或点击「解析并填充」')
   }
 
-  const filtered = keyword
-    ? data.filter((r) => {
-        const staff = r.attendance_staff ?? []
-        const attByName = staff.map((u) => attendanceDisplayByUsername.get(u) ?? u).join(' ')
-        const attByUser = staff.join(' ')
-        return (
-          r.project.includes(keyword) ||
-          r.workContent.includes(keyword) ||
-          r.recorder.includes(keyword) ||
-          r.date.includes(keyword) ||
-          attByName.includes(keyword) ||
-          attByUser.includes(keyword)
-        )
+  const projectFilterOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          data
+            .map((r) => String(r.project || '').trim())
+            .filter(Boolean),
+        ),
+      )
+        .sort((a, b) => a.localeCompare(b))
+        .map((p) => ({ value: p, label: p })),
+    [data],
+  )
+
+  const filtered = data
+
+  const handleExportLogsExcel = useCallback(async () => {
+    const exportTotal = serverPaging ? total : filtered.length
+    if (!exportTotal) {
+      msg.warning('暂无可导出的施工日志')
+      return
+    }
+    if (exportTotal > EXPORT_EXCEL_MAX_ROWS) {
+      msg.warning(`当前 ${exportTotal} 条，超过导出上限 ${EXPORT_EXCEL_MAX_ROWS} 条，请先筛选后再导出`)
+      return
+    }
+    setExportingExcel(true)
+    try {
+      const params = new URLSearchParams()
+      if (projectFilter) params.set('project_name', projectFilter)
+      if (keyword.trim()) params.set('keyword', keyword.trim())
+      const token = user?.token
+      const res = await fetch(`/api/construction/logs/export-excel?${params.toString()}`, {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       })
-    : data
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error((err as { message?: string }).message || '导出失败')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const timeStr = dayjs().format('YYYYMMDD_HHmmss')
+      a.download = `施工日志_${timeStr}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      msg.success(`已导出 ${exportTotal} 条（当前筛选下全部数据）`)
+    } catch (e: any) {
+      msg.error(e?.message || '导出失败')
+    } finally {
+      setExportingExcel(false)
+    }
+  }, [filtered, keyword, msg, projectFilter, serverPaging, total, user?.token])
 
   const columns: ColumnsType<LogEntry> = [
     { title: '日期', dataIndex: 'date', width: 120, sorter: (a, b) => a.date.localeCompare(b.date), defaultSortOrder: 'descend' },
@@ -1064,9 +1142,24 @@ const ConstructionLogPage: React.FC = () => {
         <Search
           placeholder="搜索项目 / 内容 / 日期"
           allowClear
-          onSearch={setKeyword}
+          onSearch={(v) => {
+            setKeyword(v.trim())
+          }}
           style={{ width: 260 }}
         />
+        <Select
+          allowClear
+          placeholder="项目筛选"
+          style={{ width: 220 }}
+          value={projectFilter ?? undefined}
+          options={projectFilterOptions}
+          onChange={(v) => {
+            setProjectFilter(v ?? null)
+          }}
+        />
+        <Button icon={<DownloadOutlined />} loading={exportingExcel} onClick={() => void handleExportLogsExcel()}>
+          导出Excel（全部）
+        </Button>
         <Button type="primary" onClick={openCreate}>记录日志</Button>
       </Space>
 
@@ -1074,7 +1167,19 @@ const ConstructionLogPage: React.FC = () => {
         rowKey="id"
         dataSource={filtered}
         columns={columns}
-        pagination={{ pageSize: 10 }}
+        pagination={
+          serverPaging
+            ? {
+                current: page,
+                pageSize,
+                total,
+                showSizeChanger: true,
+                onChange: (p, ps) => {
+                  void fetchLogs({ page: p, pageSize: ps })
+                },
+              }
+            : { pageSize: 10 }
+        }
         size="middle"
         loading={listLoading}
       />
