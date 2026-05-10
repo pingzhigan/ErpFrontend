@@ -52,6 +52,7 @@ import {
   ShoppingOutlined,
   SwapOutlined,
   ThunderboltOutlined,
+  TeamOutlined,
   ToolOutlined,
   UserOutlined,
   DatabaseOutlined,
@@ -92,6 +93,7 @@ import {
   LogsPage,
   MaintenanceMinorWorkPage,
   MaintenanceSchedulePage,
+  PersonnelPresencePage,
   OpportunitiesPage,
   OpportunityDetailPage,
   OpportunityTodosPage,
@@ -125,6 +127,12 @@ const appRoutes: AppRouteItem[] = [
     name: '仪表盘',
     icon: <DashboardOutlined />,
     permission: 'dashboard',
+  },
+  {
+    path: '/personnel-presence',
+    name: '人员在岗状态',
+    icon: <TeamOutlined />,
+    permission: 'maintenance',
   },
   { key: 'divider-1', name: '', divider: true },
   {
@@ -1281,6 +1289,15 @@ const LayoutWithMenu: React.FC = () => {
               </RequireAuth>
             }
           />
+          <Route
+            path="/personnel-presence"
+            element={
+              <RequireAuth permissions={['maintenance']}>
+                <PersonnelPresencePage />
+              </RequireAuth>
+            }
+          />
+          <Route path="/maintenance/personnel-presence" element={<Navigate to="/personnel-presence" replace />} />
           <Route
             path="/project-products"
             element={

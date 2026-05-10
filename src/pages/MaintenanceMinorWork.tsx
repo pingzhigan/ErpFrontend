@@ -1,6 +1,6 @@
 /**
  * 维护管理 - 零星工程
- * 业务流：① 分配/转派负责人与施工人员 → ② 派单确认（计划与说明）→ ③ 跟踪 → ④ 闭环。分配与转派写入跟踪时间线（track_kind）。
+ * 业务流：① 分配到部门（部门负责人）→ ② 由部门负责人分配施工人员（闭环前须补全）→ ③ 派单确认（指定部门负责人后即可填写派单信息）→ ④ 跟踪 → ⑤ 闭环。分配与转派写入跟踪时间线（track_kind）。
  */
 import {
   FormOutlined,
@@ -179,25 +179,12 @@ function minorWorkHasConstructionWorkers(order: MinorWorkOrder | null | undefine
   return Array.isArray(order?.construction_workers) && order.construction_workers.length > 0
 }
 
-/** 负责人 + 至少一名施工人员均已指定 */
-function minorWorkAssignComplete(order: MinorWorkOrder | null | undefined): boolean {
-  return minorWorkHasHandler(order) && minorWorkHasConstructionWorkers(order)
-}
-
-/** 待派单阶段：审批通过且已分配负责人与施工人员时，可填计划/说明、上传派单附件 */
+/** 待派单阶段：须已指定部门负责人，方可填计划/说明、上传派单附件并确认派单 */
 function minorWorkDispatchFormEnabled(audit: GateAudit | undefined, order: MinorWorkOrder | null): boolean {
-  return Boolean(order && order.status === 'pending' && minorWorkOpsUnlocked(audit) && minorWorkAssignComplete(order))
+  return Boolean(
+    order && order.status === 'pending' && minorWorkOpsUnlocked(audit) && minorWorkHasHandler(order),
+  )
 }
-
-const constructionWorkersRequiredRules = [
-  { required: true, message: '请选择施工人员' },
-  {
-    validator: (_: unknown, v: unknown) =>
-      Array.isArray(v) && v.length > 0
-        ? Promise.resolve()
-        : Promise.reject(new Error('至少选择一名施工人员')),
-  },
-]
 
 type MinorWorkTrack = {
   id: number
@@ -302,7 +289,7 @@ const MINOR_WORK_LIST_COL_LABEL: Record<MinorWorkListColKey, string> = {
   cost_budget: '成本预算',
   progress: '进度',
   status: '状态',
-  handler: '负责人',
+  handler: '部门负责人',
   construction_workers: '施工人员',
   audit: '审批',
 }
@@ -501,8 +488,10 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   const [trackAttachments, setTrackAttachments] = useState<MinorWorkTrackAttachmentDto[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
   const [dispatchForm] = Form.useForm()
-  const [assignHandlerForm] = Form.useForm()
-  const [assignHandlerSubmitting, setAssignHandlerSubmitting] = useState(false)
+  const [assignDeptForm] = Form.useForm()
+  const [assignWorkersForm] = Form.useForm()
+  const [assignDeptSubmitting, setAssignDeptSubmitting] = useState(false)
+  const [assignWorkersSubmitting, setAssignWorkersSubmitting] = useState(false)
   const [confirmDispatchLoading, setConfirmDispatchLoading] = useState(false)
   const [trackForm] = Form.useForm()
   const [trackProgress, setTrackProgress] = useState(30)
@@ -666,8 +655,10 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         setTrackAttachments(res.data.trackAttachments ?? [])
         const o = res.data.order
         const planDefault = parseMinorPlanDateDefault(o.plan_date, o.due_at)
-        assignHandlerForm.setFieldsValue({
+        assignDeptForm.setFieldsValue({
           handler: o.handler?.trim() ? o.handler.trim() : undefined,
+        })
+        assignWorkersForm.setFieldsValue({
           construction_workers: Array.isArray(o.construction_workers) ? o.construction_workers : [],
         })
         dispatchForm.setFieldsValue({
@@ -683,7 +674,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         setDetailLoading(false)
       }
     },
-    [assignHandlerForm, dispatchForm, msg, trackForm],
+    [assignDeptForm, assignWorkersForm, dispatchForm, msg, trackForm],
   )
 
   const trackAttachmentsByTrackId = useMemo(() => {
@@ -726,8 +717,8 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       const st = createRes.data?.audit?.audit_status
       msg.success(
         gate && st === 'draft'
-          ? '已创建。审批通过后请先在详情「分配任务」指定负责人与施工人员，再确认派单与跟踪'
-          : '已创建。请先在详情「分配任务」指定负责人与施工人员，再确认派单',
+          ? '已创建。审批通过后请先指定部门负责人，即可填写派单信息；施工人员可在派单前后由负责人补全，闭环前须至少一人'
+          : '已创建。请先指定部门负责人，即可填写派单信息；施工人员可在派单前后由负责人补全，闭环前须至少一人',
       )
       setCreateOpen(false)
       createForm.resetFields()
@@ -774,42 +765,84 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     }
   }
 
-  const submitAssignHandler = async () => {
+  const submitAssignDept = async () => {
     if (!detailId || !order) return
-    const wasHandler = Boolean(order.handler?.trim())
+    const hadHandler = minorWorkHasHandler(order)
     try {
-      const v = await assignHandlerForm.validateFields()
-      setAssignHandlerSubmitting(true)
+      const v = await assignDeptForm.validateFields(['handler'])
+      setAssignDeptSubmitting(true)
       const res = await axios.post<{
         order: MinorWorkOrder
         tracks: MinorWorkTrack[]
         dispatchAttachments?: DispatchAttachmentDto[]
       }>(`/api/minor-works/${detailId}/assign-handler`, {
         handler: v.handler,
+      })
+      const no = res.data.order
+      setOrder({ ...no, audit: no.audit })
+      setTracks(res.data.tracks ?? [])
+      setDispatchAttachments(res.data.dispatchAttachments ?? [])
+      assignDeptForm.setFieldsValue({
+        handler: no.handler?.trim() || undefined,
+      })
+      assignWorkersForm.setFieldsValue({
+        construction_workers: Array.isArray(no.construction_workers) ? no.construction_workers : [],
+      })
+      msg.success(
+        order.status === 'pending'
+          ? hadHandler
+            ? '已调整部门负责人'
+            : '已分配到部门'
+          : hadHandler
+            ? '已转派部门负责人'
+            : '已指定部门负责人',
+      )
+      fetchList()
+    } catch (e: unknown) {
+      if ((e as { errorFields?: unknown })?.errorFields) return
+      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存失败')
+    } finally {
+      setAssignDeptSubmitting(false)
+    }
+  }
+
+  const submitAssignWorkers = async () => {
+    if (!detailId || !order) return
+    if (!minorWorkHasHandler(order)) {
+      msg.warning('请先在「① 分配到部门」中指定部门负责人')
+      return
+    }
+    try {
+      const v = await assignWorkersForm.validateFields(['construction_workers'])
+      setAssignWorkersSubmitting(true)
+      const res = await axios.post<{
+        order: MinorWorkOrder
+        tracks: MinorWorkTrack[]
+        dispatchAttachments?: DispatchAttachmentDto[]
+      }>(`/api/minor-works/${detailId}/assign-handler`, {
         construction_workers: Array.isArray(v.construction_workers) ? v.construction_workers : [],
       })
       const no = res.data.order
       setOrder({ ...no, audit: no.audit })
       setTracks(res.data.tracks ?? [])
       setDispatchAttachments(res.data.dispatchAttachments ?? [])
-      assignHandlerForm.setFieldsValue({
-        handler: no.handler?.trim() || undefined,
+      assignWorkersForm.setFieldsValue({
         construction_workers: Array.isArray(no.construction_workers) ? no.construction_workers : [],
       })
-      msg.success(wasHandler ? '已转派' : '已分配')
+      msg.success('已保存施工人员')
       fetchList()
     } catch (e: unknown) {
       if ((e as { errorFields?: unknown })?.errorFields) return
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存失败')
     } finally {
-      setAssignHandlerSubmitting(false)
+      setAssignWorkersSubmitting(false)
     }
   }
 
   const confirmDispatch = async () => {
     if (!detailId || !order) return
-    if (!minorWorkAssignComplete(order)) {
-      msg.warning('请先分配负责人，并至少指定一名施工人员')
+    if (!minorWorkHasHandler(order)) {
+      msg.warning('请先完成「① 分配到部门」指定部门负责人')
       return
     }
     try {
@@ -819,7 +852,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         plan_date: v.plan_date ? dayjs(v.plan_date).startOf('hour').format('YYYY-MM-DD HH:00') : null,
         dispatch_note: (v.dispatch_note ?? '').trim(),
       })
-      msg.success('派单已确认，负责人可进行跟踪记录')
+      msg.success('派单已确认，部门负责人可进行跟踪记录')
       await loadDetail(detailId)
       fetchList()
     } catch (e: unknown) {
@@ -860,7 +893,11 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   }
 
   const submitClose = async () => {
-    if (!detailId) return
+    if (!detailId || !order) return
+    if (!minorWorkHasConstructionWorkers(order)) {
+      msg.warning('闭环前须至少指定一名施工人员，请先在「② 分配施工人员」或「转派」中补全')
+      return
+    }
     setCloseLoading(true)
     try {
       const res = await axios.post<MinorWorkOrder & { audit?: GateAudit }>(`/api/minor-works/${detailId}/close`, {
@@ -1021,8 +1058,8 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       if (!detailId) return
       if (!minorWorkDispatchFormEnabled(order?.audit, order ?? null)) {
         msg.warning(
-          !minorWorkAssignComplete(order)
-            ? '请先分配负责人，并至少指定一名施工人员'
+          !minorWorkHasHandler(order)
+            ? '请先完成「① 分配到部门」指定部门负责人'
             : '须先在钉钉完成审批通过后，方可上传派单图片',
         )
         return
@@ -1262,7 +1299,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       {
         key: 'handler',
         col: {
-          title: '负责人',
+          title: '部门负责人',
           dataIndex: 'handler',
           width: MINOR_WORK_LIST_COL_WIDTH.handler,
           ellipsis: true,
@@ -1358,8 +1395,8 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     <Steps
       current={order ? stepCurrent(order.status) : 0}
       items={[
-        { title: '分配与派单', description: '负责人、施工人员、计划与说明', icon: <FormOutlined /> },
-        { title: '负责人跟踪与说明', description: '过程记录与进度', icon: <SendOutlined /> },
+        { title: '分配与派单', description: '指定部门负责人后即可填计划与说明；施工人员闭环前补全', icon: <FormOutlined /> },
+        { title: '部门负责人跟踪与说明', description: '过程记录与进度', icon: <SendOutlined /> },
         { title: '闭环', description: '完成确认', icon: <CheckCircleOutlined /> },
       ]}
       style={{ marginBottom: 28 }}
@@ -1374,7 +1411,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
           零星工程
         </Title>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          须先「分配任务」指定负责人与施工人员，再确认派单（计划与说明）；已派单后可「转派」。流程：分配 → 派单确认 → 跟踪 → 闭环
+          ① 指定部门负责人后即可填写派单；② 施工人员可在派单前后补全，闭环前须至少一人。已派单后可转派。流程：① → 派单 → 跟踪 → 闭环
         </Text>
         <Search
           placeholder="搜索编号/标题/客户/内容/截止时间"
@@ -1607,7 +1644,10 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                   提交钉钉审批
                 </Button>
               ) : null}
-              {order.status !== 'pending' && order.status !== 'closed' && minorWorkOpsUnlocked(order.audit) ? (
+              {order.status !== 'pending' &&
+              order.status !== 'closed' &&
+              minorWorkOpsUnlocked(order.audit) &&
+              minorWorkHasConstructionWorkers(order) ? (
                 <Button type="primary" onClick={() => setCloseOpen(true)}>
                   确认闭环
                 </Button>
@@ -1626,16 +1666,28 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                 showIcon
                 style={{ marginBottom: 16 }}
                 message="已启用钉钉审批"
-                description="须审批通过后方可确认派单、上传派单图片、填写跟踪记录与闭环。请先完成「分配任务」指定负责人与施工人员。请在列表或上方提交钉钉流程。"
+                description="须审批通过后方可确认派单、上传派单图片、填写跟踪记录与闭环。请先完成 ① 指定部门负责人即可派单；② 施工人员闭环前须补全。请在列表或上方提交钉钉流程。"
               />
             ) : null}
-            {order.status === 'pending' && !minorWorkAssignComplete(order) && canEditMinorWorkWithAudit(order.audit) ? (
+            {order.status === 'pending' && !minorWorkHasHandler(order) && canEditMinorWorkWithAudit(order.audit) ? (
               <Alert
                 type="info"
                 showIcon
                 style={{ marginBottom: 16 }}
-                message="请先分配任务"
-                description="在下方选择负责人、施工人员（至少一人）并保存后，方可填写计划、派单说明与上传附件，并确认派单。"
+                message="请先完成 ① 分配到部门"
+                description="在下方「① 分配到部门」选择部门负责人并保存后，即可填写计划、派单说明与上传附件并确认派单。建议在派单前后于「② 分配施工人员」中补全人员；闭环结项前须至少一名施工人员。"
+              />
+            ) : null}
+            {order.status !== 'pending' &&
+            order.status !== 'closed' &&
+            minorWorkOpsUnlocked(order.audit) &&
+            !minorWorkHasConstructionWorkers(order) ? (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="闭环前须补全施工人员"
+                description="请在下方「② 分配施工人员」或「转派 → 施工人员」中至少指定一人（须已绑定钉钉 userId 的在职用户）后，方可确认闭环。"
               />
             ) : null}
             <Descriptions
@@ -1674,7 +1726,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
               <Descriptions.Item label="工程金额">{formatMoney(order.project_amount)}</Descriptions.Item>
               <Descriptions.Item label="成本预算">{formatMoney(order.cost_budget)}</Descriptions.Item>
               <Descriptions.Item label="登记日期">{formatMinorWorkCreatedAt(order.created_at)}</Descriptions.Item>
-              <Descriptions.Item label="负责人">
+              <Descriptions.Item label="部门负责人">
                 {handlerDisplayLabel ?? <Text type="secondary">待分配</Text>}
               </Descriptions.Item>
               <Descriptions.Item label="施工人员" span={2}>
@@ -1721,97 +1773,131 @@ const MaintenanceMinorWorkPage: React.FC = () => {
 
             {(order.status === 'dispatched' || order.status === 'in_progress') &&
             canEditMinorWorkWithAudit(order.audit) ? (
-              <Card
-                size="small"
-                title="转派任务"
-                style={{ marginBottom: 24 }}
-                extra={<Text type="secondary" style={{ fontSize: 12 }}>改派后写入跟踪时间线</Text>}
-              >
-                <Form form={assignHandlerForm} layout="vertical" style={{ maxWidth: 420 }}>
-                  <Form.Item name="handler" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
-                    <Select
-                      showSearch
-                      optionFilterProp="label"
-                      placeholder="在职系统用户"
-                      options={handlerSelectOptions}
-                      loading={handlerUsersLoading}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    name="construction_workers"
-                    label="施工人员"
-                    rules={constructionWorkersRequiredRules}
-                    extra="必选，至少一名；须已绑定钉钉的在职用户。"
-                  >
-                    <Select
-                      mode="multiple"
-                      allowClear
-                      showSearch
-                      optionFilterProp="label"
-                      placeholder="至少选择一名施工人员"
-                      options={constructionWorkerSelectOptions}
-                      loading={handlerUsersLoading}
-                    />
-                  </Form.Item>
-                  <Button type="primary" loading={assignHandlerSubmitting} onClick={() => void submitAssignHandler()}>
-                    确认转派
-                  </Button>
-                </Form>
-              </Card>
+              <>
+                <Card
+                  size="small"
+                  title="转派 · 部门负责人"
+                  style={{ marginBottom: 16 }}
+                  extra={<Text type="secondary" style={{ fontSize: 12 }}>写入跟踪时间线</Text>}
+                >
+                  <Form form={assignDeptForm} layout="vertical" style={{ maxWidth: 420 }}>
+                    <Form.Item
+                      name="handler"
+                      label="部门负责人"
+                      rules={[{ required: true, message: '请选择部门负责人' }]}
+                      extra="将任务分配到部门，由该负责人在下一步指定施工人员。"
+                    >
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder="在职系统用户"
+                        options={handlerSelectOptions}
+                        loading={handlerUsersLoading}
+                      />
+                    </Form.Item>
+                    <Button type="primary" loading={assignDeptSubmitting} onClick={() => void submitAssignDept()}>
+                      保存部门负责人
+                    </Button>
+                  </Form>
+                </Card>
+                <Card size="small" title="转派 · 施工人员" style={{ marginBottom: 24 }}>
+                  <Form form={assignWorkersForm} layout="vertical" style={{ maxWidth: 420 }}>
+                    <Form.Item
+                      name="construction_workers"
+                      label="施工人员"
+                      extra="由部门负责人指定；闭环前须至少一人。须已绑定钉钉的在职用户。"
+                    >
+                      <Select
+                        mode="multiple"
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder="选择施工人员"
+                        options={constructionWorkerSelectOptions}
+                        loading={handlerUsersLoading}
+                      />
+                    </Form.Item>
+                    <Button type="primary" loading={assignWorkersSubmitting} onClick={() => void submitAssignWorkers()}>
+                      保存施工人员
+                    </Button>
+                  </Form>
+                </Card>
+              </>
             ) : null}
 
             {order.status === 'pending' && canEditMinorWorkWithAudit(order.audit) ? (
-              <Card
-                size="small"
-                title={minorWorkHasHandler(order) ? '分配任务（可调整负责人）' : '分配任务'}
-                style={{ marginBottom: 24 }}
-                extra={
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    须先完成本步，再填写下方计划与派单说明
-                  </Text>
-                }
-              >
-                <Form form={assignHandlerForm} layout="vertical" style={{ maxWidth: 420 }}>
-                  <Form.Item name="handler" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
-                    <Select
-                      showSearch
-                      optionFilterProp="label"
-                      placeholder="在职系统用户"
-                      options={handlerSelectOptions}
-                      loading={handlerUsersLoading}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    name="construction_workers"
-                    label="施工人员"
-                    rules={constructionWorkersRequiredRules}
-                    extra="必选，至少一名；须已绑定钉钉 userId 的在职用户。"
-                  >
-                    <Select
-                      mode="multiple"
-                      allowClear
-                      showSearch
-                      optionFilterProp="label"
-                      placeholder="至少选择一名施工人员"
-                      options={constructionWorkerSelectOptions}
-                      loading={handlerUsersLoading}
-                    />
-                  </Form.Item>
-                  <Button type="primary" loading={assignHandlerSubmitting} onClick={() => void submitAssignHandler()}>
-                    {minorWorkHasHandler(order) ? '确认调整' : '确认分配'}
-                  </Button>
-                </Form>
-              </Card>
+              <>
+                <Card
+                  size="small"
+                  title="① 分配到部门（部门负责人）"
+                  style={{ marginBottom: 16 }}
+                  extra={
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      须先完成本步，方可填写下方派单
+                    </Text>
+                  }
+                >
+                  <Form form={assignDeptForm} layout="vertical" style={{ maxWidth: 420 }}>
+                    <Form.Item
+                      name="handler"
+                      label="部门负责人"
+                      rules={[{ required: true, message: '请选择部门负责人' }]}
+                      extra="选择接收本单的部门负责人（不在此步选择具体施工人员）。"
+                    >
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder="在职系统用户"
+                        options={handlerSelectOptions}
+                        loading={handlerUsersLoading}
+                      />
+                    </Form.Item>
+                    <Button type="primary" loading={assignDeptSubmitting} onClick={() => void submitAssignDept()}>
+                      {minorWorkHasHandler(order) ? '保存部门负责人' : '确认分配到部门'}
+                    </Button>
+                  </Form>
+                </Card>
+                <Card size="small" title="② 部门负责人分配施工人员" style={{ marginBottom: 24 }}>
+                  {!minorWorkHasHandler(order) ? (
+                    <Text type="secondary">请先完成上方「① 分配到部门」并保存。</Text>
+                  ) : (
+                    <Form form={assignWorkersForm} layout="vertical" style={{ maxWidth: 420 }}>
+                      <Form.Item
+                        name="construction_workers"
+                        label="施工人员"
+                        extra="由部门负责人指定；闭环前须至少一人。须已绑定钉钉 userId 的在职用户。"
+                      >
+                        <Select
+                          mode="multiple"
+                          allowClear
+                          showSearch
+                          optionFilterProp="label"
+                          placeholder="选择施工人员"
+                          options={constructionWorkerSelectOptions}
+                          loading={handlerUsersLoading}
+                        />
+                      </Form.Item>
+                      <Button
+                        type="primary"
+                        loading={assignWorkersSubmitting}
+                        onClick={() => void submitAssignWorkers()}
+                      >
+                        保存施工人员
+                      </Button>
+                    </Form>
+                  )}
+                </Card>
+              </>
             ) : null}
 
             {order.status === 'pending' && (
-              <Card title="② 确认派单" style={{ marginBottom: 24 }}>
+              <Card title="③ 确认派单" style={{ marginBottom: 24 }}>
                 <Form form={dispatchForm} layout="vertical">
                   <Form.Item
                     name="plan_date"
                     label="计划完成日期"
                     rules={[{ required: true, message: '请选择计划完成时间（精确到小时）' }]}
-                    extra="默认与上方「截止时间」一致（含整点时刻），可按需调整。须已分配负责人与施工人员且审批通过后方可编辑。"
+                    extra="默认与上方「截止时间」一致（含整点时刻），可按需调整。须已指定部门负责人且审批通过后方可编辑。"
                   >
                     <DatePicker
                       style={{ width: '100%' }}
@@ -1891,7 +1977,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
             )}
 
             {order.status !== 'pending' && (
-              <Card title="③ 负责人跟踪与说明" style={{ marginBottom: 24 }}>
+              <Card title="④ 部门负责人跟踪与说明" style={{ marginBottom: 24 }}>
                 {tracks.length === 0 ? (
                   <Text type="secondary">暂无跟踪记录，请填写下方说明并保存。</Text>
                 ) : (
@@ -1978,7 +2064,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
             )}
 
             {order.status === 'closed' && (
-              <Card title="③ 闭环">
+              <Card title="闭环">
                 <Text>本单已于 {formatDueAtText(order.finish_date)} 闭环。</Text>
               </Card>
             )}
@@ -1996,7 +2082,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         okText="确认闭环"
       >
         <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-          闭环后进度将记为 100%，并记录完成日期。可填写总结说明。
+          闭环后进度将记为 100%，并记录完成日期。可填写总结说明。须已指定至少一名施工人员。
         </Text>
         <TextArea rows={4} value={closeNote} onChange={(e) => setCloseNote(e.target.value)} placeholder="闭环说明（可选）" />
       </Modal>
