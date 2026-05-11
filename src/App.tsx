@@ -380,6 +380,7 @@ type MaintenancePushItem = {
   eventType:
     | 'minor_work_dispatch'
     | 'minor_work_closed'
+    | 'minor_work_construction_workers_changed'
     | 'maintenance_task_dispatch'
     | 'maintenance_task_closed'
     | 'construction_log_created'

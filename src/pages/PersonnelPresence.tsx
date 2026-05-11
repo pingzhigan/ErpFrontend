@@ -4,10 +4,11 @@
  */
 import { LeftOutlined, RightOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { App, Alert, Button, Card, Input, Popover, Radio, Space, Table, Typography } from 'antd'
+import { App, Alert, Button, Card, Input, Popover, Radio, Space, Table, Tag, Typography } from 'antd'
 import axios from 'axios'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { useAuth } from '../auth/AuthContext'
 import { labelForAssigneeUsername } from '../utils/constructionAssigneeOptions'
 
 const { Title, Text } = Typography
@@ -146,6 +147,7 @@ const DayCalendarCell: React.FC<{
   person: WeekPerson
   cell: DayCell
   isToday: boolean
+  canEdit: boolean
   active: ActivePopover
   setActive: React.Dispatch<React.SetStateAction<ActivePopover>>
   draftStatus: DayStatusKey
@@ -159,6 +161,7 @@ const DayCalendarCell: React.FC<{
   person,
   cell,
   isToday,
+  canEdit,
   active,
   setActive,
   draftStatus,
@@ -252,6 +255,80 @@ const DayCalendarCell: React.FC<{
       </Space>
     </div>
   )
+
+  const readonlyZoneStyle = (zone: 'status' | 'remark'): React.CSSProperties =>
+    zone === 'status'
+      ? {
+          flex: 1,
+          minHeight: 56,
+          width: '100%',
+          border: 'none',
+          padding: '12px 10px 10px',
+          cursor: 'default',
+          textAlign: 'center',
+          background: visual.statusZoneBg,
+          borderBottom: '1px dashed var(--ant-color-split, rgba(5,5,5,0.06))',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+        }
+      : {
+          flex: 1,
+          minHeight: 52,
+          width: '100%',
+          border: 'none',
+          padding: '10px 10px 12px',
+          cursor: 'default',
+          textAlign: 'left',
+          background: visual.remarkZoneBg,
+          color: cell.remark ? 'var(--ant-color-text-secondary, rgba(0,0,0,0.65))' : 'var(--ant-color-text-quaternary, rgba(0,0,0,0.25))',
+          fontSize: 12,
+          lineHeight: 1.5,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }
+
+  if (!canEdit) {
+    return (
+      <div
+        style={{
+          ...outerBoxBase,
+          border: `1px solid ${isToday ? 'var(--ant-color-primary, #1677ff)' : visual.border}`,
+          boxShadow: isToday ? `0 0 0 1px var(--ant-color-primary-bg, #e6f4ff), ${visual.shadow}` : visual.shadow,
+          background: visual.cardBg,
+          position: 'relative',
+          opacity: 0.92,
+        }}
+        className="pp-cal-cell-wrap"
+      >
+        <div style={readonlyZoneStyle('status')}>
+          <div
+            style={{
+              height: 4,
+              width: '80%',
+              maxWidth: 120,
+              borderRadius: 2,
+              background: visual.barColor,
+              opacity: 0.85,
+            }}
+          />
+          <span
+            style={{
+              fontSize: 15,
+              fontWeight: 600,
+              lineHeight: 1.35,
+              color: visual.statusText,
+            }}
+          >
+            {cell.status_label}
+          </span>
+        </div>
+        <div style={readonlyZoneStyle('remark')}>{cell.remark ? cell.remark : '—'}</div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -354,6 +431,7 @@ const DayCalendarCell: React.FC<{
 
 const PersonnelPresencePage: React.FC = () => {
   const { message } = App.useApp()
+  const { user } = useAuth()
   const [loading, setLoading] = useState(false)
   const [weekQuery, setWeekQuery] = useState<string | undefined>(undefined)
   const [week, setWeek] = useState<WeekPayload | null>(null)
@@ -386,12 +464,21 @@ const PersonnelPresencePage: React.FC = () => {
   const filteredPeople = useMemo(() => {
     const list = week?.people ?? []
     const q = search.trim().toLowerCase()
-    if (!q) return list
-    return list.filter((p) => {
-      const rn = (p.real_name ?? '').toLowerCase()
-      return p.username.toLowerCase().includes(q) || rn.includes(q)
+    const filtered = !q
+      ? list
+      : list.filter((p) => {
+          const rn = (p.real_name ?? '').toLowerCase()
+          return p.username.toLowerCase().includes(q) || rn.includes(q)
+        })
+    const selfName = (user?.username ?? '').trim()
+    return [...filtered].sort((a, b) => {
+      const aSelf = Boolean(selfName && a.username === selfName)
+      const bSelf = Boolean(selfName && b.username === selfName)
+      if (aSelf && !bSelf) return -1
+      if (!aSelf && bSelf) return 1
+      return a.username.localeCompare(b.username, 'zh-CN')
     })
-  }, [week, search])
+  }, [week, search, user?.username])
 
   const onSaveStatus = useCallback(
     async (username: string, date: string, status: DayStatusKey, remarkKeep: string | null) => {
@@ -472,9 +559,21 @@ const PersonnelPresencePage: React.FC = () => {
               padding: '12px 10px',
             },
           }) as React.HTMLAttributes<HTMLTableCellElement>,
-        render: (_, p) => (
-          <Text style={{ fontSize: 14, fontWeight: 500 }}>{labelForAssigneeUsername(p.username, p.real_name)}</Text>
-        ),
+        render: (_, p) => {
+          const isSelf = Boolean(user?.username && p.username === user.username)
+          return (
+            <Space size={8} wrap>
+              {isSelf ? (
+                <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+                  我
+                </Tag>
+              ) : null}
+              <Text style={{ fontSize: 14, fontWeight: isSelf ? 600 : 500 }}>
+                {labelForAssigneeUsername(p.username, p.real_name)}
+              </Text>
+            </Space>
+          )
+        },
       },
     ]
     for (let i = 0; i < 7; i++) {
@@ -541,11 +640,13 @@ const PersonnelPresencePage: React.FC = () => {
         render: (_, p) => {
           const cell = p.days[i]
           if (!cell) return null
+          const canEdit = Boolean(user?.username && p.username === user.username)
           return (
             <DayCalendarCell
               person={p}
               cell={cell}
               isToday={isTodayCol}
+              canEdit={canEdit}
               active={active}
               setActive={setActive}
               draftStatus={draftStatus}
@@ -561,7 +662,7 @@ const PersonnelPresencePage: React.FC = () => {
       })
     }
     return base
-  }, [week, active, draftStatus, draftRemark, saving, onSaveStatus, onSaveRemark])
+  }, [week, user, active, draftStatus, draftRemark, saving, onSaveStatus, onSaveRemark])
 
   return (
     <div style={{ padding: 24 }}>
@@ -572,7 +673,7 @@ const PersonnelPresencePage: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="团队日历：名单与「用户管理」同步（在职且已绑定钉钉；排除名称中含机器人/大屏等关键字的功能账号）。工作日未设置默认为「在岗」，周日未设置默认为「休息」。上框为状态、下框为说明，分别点击编辑。"
+        message="团队日历：名单与「用户管理」同步（在职且已绑定钉钉；排除名称中含机器人/大屏等关键字的功能账号）。工作日未设置默认为「在岗」，周日未设置默认为「休息」。每人仅可编辑本人行的状态与说明，他人行为只读。"
       />
       <Card
         styles={{ body: { padding: '16px 16px 20px' } }}
@@ -633,6 +734,13 @@ const PersonnelPresencePage: React.FC = () => {
           <style>{`
             .pp-team-calendar .ant-table-thead > tr > th { padding: 10px 8px !important; }
             .pp-team-calendar .ant-table-tbody > tr > td { padding: 10px 8px !important; vertical-align: top !important; }
+            .pp-team-calendar .ant-table-tbody > tr.pp-table-row-self > td {
+              background: rgba(22, 119, 255, 0.06) !important;
+              box-shadow: inset 3px 0 0 var(--ant-color-primary, #1677ff);
+            }
+            .pp-team-calendar .ant-table-tbody > tr.pp-table-row-self:hover > td {
+              background: rgba(22, 119, 255, 0.09) !important;
+            }
             .pp-team-calendar .pp-cal-cell-wrap:hover {
               box-shadow: 0 2px 6px 0 var(--ant-color-fill-secondary, rgba(0,0,0,0.06)) !important;
             }
@@ -652,6 +760,11 @@ const PersonnelPresencePage: React.FC = () => {
             bordered={false}
             showHeader
             className="pp-team-calendar"
+            onRow={(record) =>
+              user?.username && record.username === user.username
+                ? { className: 'pp-table-row-self' }
+                : {}
+            }
           />
         </div>
       </Card>
