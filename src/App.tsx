@@ -44,6 +44,7 @@ import {
   BarChartOutlined,
   BookOutlined,
   DashboardOutlined,
+  ExperimentOutlined,
   FolderOutlined,
   HistoryOutlined,
   RobotOutlined,
@@ -101,6 +102,8 @@ import {
   ProjectAnalysisPage,
   ProjectProductListPage,
   ProjectsPage,
+  RdResearchDocsPage,
+  RdResearchTodosPage,
   StaffHandoverPage,
   UserManagementPage,
   WorkbenchPushMessagesPage,
@@ -235,6 +238,16 @@ const appRoutes: AppRouteItem[] = [
     name: '知识库',
     icon: <BookOutlined />,
     permission: 'knowledge',
+  },
+  {
+    path: '/rd-mgmt',
+    name: '研发管理',
+    key: '/rd-mgmt',
+    icon: <ExperimentOutlined />,
+    routes: [
+      { path: '/rd/todos', name: '研发待办', key: '/rd/todos', permission: 'rd-mgmt' },
+      { path: '/rd/docs', name: '研发文档', key: '/rd/docs', permission: 'rd-mgmt' },
+    ] as AppRouteItem[],
   },
   { key: 'divider-3', name: '', divider: true },
   {
@@ -451,14 +464,16 @@ const LayoutWithMenu: React.FC = () => {
   const isUnderConstruction = pathname.startsWith('/construction')
   const isUnderMaintenance = pathname.startsWith('/maintenance')
   const isUnderUsersMgr = pathname === '/users' || pathname.startsWith('/users/')
+  const isUnderRdMgmt = pathname.startsWith('/rd/')
   const menuOpenKeysFromPath = React.useMemo(() => {
     const keys: string[] = []
     if (isUnderProjectMgr) keys.push('/project-mgr')
     if (isUnderConstruction) keys.push('/construction-mgr')
     if (isUnderMaintenance) keys.push('/maintenance-mgr')
     if (isUnderUsersMgr) keys.push('/users-mgr')
+    if (isUnderRdMgmt) keys.push('/rd-mgmt')
     return keys
-  }, [isUnderProjectMgr, isUnderConstruction, isUnderMaintenance, isUnderUsersMgr])
+  }, [isUnderProjectMgr, isUnderConstruction, isUnderMaintenance, isUnderUsersMgr, isUnderRdMgmt])
 
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [llmProvider, setLlmProvider] = useState<string>('deepseek')
@@ -1421,6 +1436,22 @@ const LayoutWithMenu: React.FC = () => {
             element={
               <RequireAuth permissions={['knowledge']}>
                 <KnowledgePage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/rd/todos"
+            element={
+              <RequireAuth permissions={['rd-mgmt']}>
+                <RdResearchTodosPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/rd/docs"
+            element={
+              <RequireAuth permissions={['rd-mgmt']}>
+                <RdResearchDocsPage />
               </RequireAuth>
             }
           />

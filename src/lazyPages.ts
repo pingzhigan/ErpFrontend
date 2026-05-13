@@ -25,6 +25,8 @@ export const WorkbenchPushMessagesPage = lazy(() => import('./pages/WorkbenchPus
 export const ExcelParseRulesPage = lazy(() => import('./pages/ExcelParseRules'))
 export const FormulasPage = lazy(() => import('./pages/Formulas'))
 export const KnowledgePage = lazy(() => import('./pages/Knowledge'))
+export const RdResearchTodosPage = lazy(() => import('./pages/RdResearchTodos'))
+export const RdResearchDocsPage = lazy(() => import('./pages/RdResearchDocs'))
 export const AutoConfigPage = lazy(() => import('./pages/AutoConfig'))
 export const InventoryQueryPage = lazy(() => import('./pages/InventoryQuery'))
 export const InventoryMaintainPage = lazy(() => import('./pages/InventoryMaintain'))

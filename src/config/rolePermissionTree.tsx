@@ -98,6 +98,15 @@ const SIDEBAR_ENTRIES: TopEntry[] = [
     hideInMenu: true,
   },
   { kind: 'single', path: '/knowledge', name: '知识库', permission: 'knowledge' },
+  {
+    kind: 'group',
+    groupPath: '/rd-mgmt',
+    name: '研发管理',
+    children: [
+      { path: '/rd/todos', name: '研发待办', permission: 'rd-mgmt' },
+      { path: '/rd/docs', name: '研发文档', permission: 'rd-mgmt' },
+    ],
+  },
   { kind: 'divider' },
   {
     kind: 'group',
