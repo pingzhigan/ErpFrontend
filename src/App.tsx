@@ -8,6 +8,7 @@ import {
   ProLayout,
   type MenuDataItem,
 } from '@ant-design/pro-components'
+import type { ColumnsType } from 'antd/es/table'
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BrowserRouter,
@@ -26,15 +27,18 @@ import {
   Empty,
   Form,
   Input,
+  InputNumber,
   List,
   Menu,
   Modal,
   Popover,
+  Radio,
   Result,
   Select,
   Space,
   Spin,
   Switch,
+  Table,
   Tooltip,
   Typography,
   theme,
@@ -405,6 +409,32 @@ type MaintenancePushItem = {
   detail?: string
 }
 
+type AttachmentSyncPreviewRow = {
+  key: string
+  label: string
+  dataSubdir: string
+  diskBytes: number
+  diskFileCount: number
+  dbBytes: number
+  deltaBytes: number
+}
+
+type AttachmentSyncPreview = {
+  previewId: string
+  previewExpiresAt: string
+  dataDir: string
+  scannedSubdirs: string[]
+  rows: AttachmentSyncPreviewRow[]
+  diskTotalBytes: number
+  dbTotalBytes: number
+  deltaBytes: number
+  orphanDiskCount: number
+  orphanDiskSample: string[]
+  missingOnDiskCount: number
+  missingOnDiskSample: string[]
+  warnings: string[]
+}
+
 const PUSH_CATEGORY_LABEL: Record<WorkbenchPushItem['category'], string> = {
   approval: '审批',
   dingtalk: '钉钉',
@@ -480,6 +510,14 @@ const LayoutWithMenu: React.FC = () => {
   const [llmProviderOptions, setLlmProviderOptions] = useState<{ id: string; label: string }[]>([])
   const [embeddingSaveLoading, setEmbeddingSaveLoading] = useState(false)
   const [embeddingForm] = Form.useForm<{ enabled: boolean; apiUrl: string; apiKey: string; model: string }>()
+  const [attachmentQuotaForm] = Form.useForm<{ quotaGiB: number }>()
+  const [attachmentQuotaSaveLoading, setAttachmentQuotaSaveLoading] = useState(false)
+  const [attachmentQuotaSummary, setAttachmentQuotaSummary] = useState<{
+    usedBytes: number
+    remainingBytes: number
+    exceeded: boolean
+    warnLowRemaining: boolean
+  } | null>(null)
   const { message: msg } = AntdApp.useApp()
   const fetchLlmProvider = useCallback(() => {
     axios.get<{ provider: string; options: { id: string; label: string }[] }>('/api/llm-provider', { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} }).then((res) => {
@@ -487,6 +525,34 @@ const LayoutWithMenu: React.FC = () => {
       setLlmProviderOptions(res.data?.options ?? [])
     }).catch(() => {})
   }, [user?.token])
+  const fetchAttachmentQuota = useCallback(() => {
+    axios
+      .get<{
+        quotaBytes: number
+        usedBytes: number
+        remainingBytes: number
+        exceeded: boolean
+        warnLowRemaining: boolean
+      }>('/api/settings/attachment-quota', { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} })
+      .then((res) => {
+        const d = res.data
+        if (d && typeof d.quotaBytes === 'number') {
+          attachmentQuotaForm.setFieldsValue({
+            quotaGiB: Number((d.quotaBytes / (1024 * 1024 * 1024)).toFixed(4)),
+          })
+          setAttachmentQuotaSummary({
+            usedBytes: d.usedBytes,
+            remainingBytes: d.remainingBytes,
+            exceeded: Boolean(d.exceeded),
+            warnLowRemaining: Boolean(d.warnLowRemaining),
+          })
+        }
+      })
+      .catch(() => {
+        attachmentQuotaForm.resetFields()
+        setAttachmentQuotaSummary(null)
+      })
+  }, [user?.token, attachmentQuotaForm])
   const fetchEmbeddingConfig = useCallback(() => {
     axios.get<{ enabled: boolean; apiUrl: string; apiKey: string; model: string }>('/api/settings/embedding', { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} })
       .then((res) => {
@@ -501,8 +567,9 @@ const LayoutWithMenu: React.FC = () => {
     if (settingsOpen && isAdmin) {
       fetchLlmProvider()
       fetchEmbeddingConfig()
+      void fetchAttachmentQuota()
     }
-  }, [settingsOpen, isAdmin, fetchLlmProvider, fetchEmbeddingConfig])
+  }, [settingsOpen, isAdmin, fetchLlmProvider, fetchEmbeddingConfig, fetchAttachmentQuota])
   const saveEmbeddingConfig = useCallback(async () => {
     try {
       const values = await embeddingForm.validateFields()
@@ -516,6 +583,123 @@ const LayoutWithMenu: React.FC = () => {
       setEmbeddingSaveLoading(false)
     }
   }, [embeddingForm, msg, user?.token])
+  const saveAttachmentQuota = useCallback(async () => {
+    try {
+      const values = await attachmentQuotaForm.validateFields()
+      setAttachmentQuotaSaveLoading(true)
+      const quotaBytes = Math.floor(Number(values.quotaGiB) * 1024 * 1024 * 1024)
+      await axios.post('/api/settings/attachment-quota', { quotaBytes }, { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} })
+      msg.success('附件总容量已保存')
+      void fetchAttachmentQuota()
+    } catch (e: unknown) {
+      if ((e as { errorFields?: unknown })?.errorFields) return
+      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存失败')
+    } finally {
+      setAttachmentQuotaSaveLoading(false)
+    }
+  }, [attachmentQuotaForm, fetchAttachmentQuota, msg, user?.token])
+
+  const [attachmentSyncPreviewLoading, setAttachmentSyncPreviewLoading] = useState(false)
+  const [attachmentSyncPreviewData, setAttachmentSyncPreviewData] = useState<AttachmentSyncPreview | null>(null)
+  const [attachmentSyncPreviewModalOpen, setAttachmentSyncPreviewModalOpen] = useState(false)
+  const [attachmentSyncConfirmOpen, setAttachmentSyncConfirmOpen] = useState(false)
+  const [attachmentSyncMode, setAttachmentSyncMode] = useState<'disk' | 'db'>('disk')
+  const [attachmentSyncApplyPassword, setAttachmentSyncApplyPassword] = useState('')
+  const [attachmentSyncApplyLoading, setAttachmentSyncApplyLoading] = useState(false)
+
+  const runAttachmentSyncPreview = useCallback(async () => {
+    if (!user?.token) return
+    setAttachmentSyncPreviewLoading(true)
+    try {
+      const res = await axios.post<AttachmentSyncPreview>(
+        '/api/settings/attachment-storage/sync-preview',
+        {},
+        { headers: { Authorization: `Bearer ${user.token}` } },
+      )
+      setAttachmentSyncPreviewData(res.data)
+      setAttachmentSyncPreviewModalOpen(true)
+    } catch (e: unknown) {
+      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '预览失败')
+    } finally {
+      setAttachmentSyncPreviewLoading(false)
+    }
+  }, [msg, user?.token])
+
+  const openAttachmentSyncConfirm = useCallback(() => {
+    if (!attachmentSyncPreviewData?.previewId) {
+      msg.warning('请先完成预览')
+      return
+    }
+    setAttachmentSyncApplyPassword('')
+    setAttachmentSyncConfirmOpen(true)
+  }, [attachmentSyncPreviewData?.previewId, msg])
+
+  const submitAttachmentSyncApply = useCallback(async (): Promise<boolean> => {
+    if (!user?.token || !attachmentSyncPreviewData?.previewId) return false
+    const pwd = attachmentSyncApplyPassword.trim()
+    if (!pwd) {
+      msg.error('请输入当前登录密码以确认同步')
+      return false
+    }
+    setAttachmentSyncApplyLoading(true)
+    try {
+      await axios.post(
+        '/api/settings/attachment-storage/sync-apply',
+        {
+          previewId: attachmentSyncPreviewData.previewId,
+          mode: attachmentSyncMode,
+          reauth_password: pwd,
+        },
+        { headers: { Authorization: `Bearer ${user.token}` } },
+      )
+      msg.success('同步已完成')
+      setAttachmentSyncConfirmOpen(false)
+      setAttachmentSyncPreviewModalOpen(false)
+      setAttachmentSyncPreviewData(null)
+      void fetchAttachmentQuota()
+      return true
+    } catch (e: unknown) {
+      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '同步失败')
+      return false
+    } finally {
+      setAttachmentSyncApplyLoading(false)
+    }
+  }, [
+    attachmentSyncApplyPassword,
+    attachmentSyncMode,
+    attachmentSyncPreviewData?.previewId,
+    fetchAttachmentQuota,
+    msg,
+    user?.token,
+  ])
+
+  const attachmentSyncPreviewColumns: ColumnsType<AttachmentSyncPreviewRow> = useMemo(
+    () => [
+      { title: '模块', dataIndex: 'label', key: 'label', width: 140 },
+      { title: '扫描目录', dataIndex: 'dataSubdir', key: 'dataSubdir', ellipsis: true },
+      {
+        title: '磁盘(GiB)',
+        key: 'diskGiB',
+        width: 100,
+        render: (_: unknown, r) => (r.diskBytes / (1024 * 1024 * 1024)).toFixed(2),
+      },
+      {
+        title: '库汇总(GiB)',
+        key: 'dbGiB',
+        width: 110,
+        render: (_: unknown, r) => (r.dbBytes / (1024 * 1024 * 1024)).toFixed(2),
+      },
+      {
+        title: '差值(GiB)',
+        key: 'deltaGiB',
+        width: 100,
+        render: (_: unknown, r) => (r.deltaBytes / (1024 * 1024 * 1024)).toFixed(2),
+      },
+      { title: '磁盘文件数', dataIndex: 'diskFileCount', key: 'diskFileCount', width: 100 },
+    ],
+    [],
+  )
+
   const [menuOpenKeys, setMenuOpenKeys] = useState<string[]>(() => menuOpenKeysFromPath)
 
   const [systemInfoOpen, setSystemInfoOpen] = useState(false)
@@ -1092,7 +1276,7 @@ const LayoutWithMenu: React.FC = () => {
           </Button>
         }
         destroyOnClose
-        width={520}
+        width={560}
       >
         <div style={{ marginBottom: 24 }}>
           <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>大模型</Typography.Text>
@@ -1110,6 +1294,49 @@ const LayoutWithMenu: React.FC = () => {
             }}
             style={{ width: '100%' }}
           />
+        </div>
+        <div style={{ marginBottom: 24 }}>
+          <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>附件总容量</Typography.Text>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
+            统计研发文档、知识库、项目合同、商机附件等已接入模块的附件大小之和；默认 5GiB（含原研发侧单独配额语义，现为全系统统一上限）。超出或剩余不足 500MB
+            时向管理员发邮件提醒，不会拦截业务上传。
+          </Typography.Text>
+          {attachmentQuotaSummary != null ? (
+            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
+              当前约已用 {(attachmentQuotaSummary.usedBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB，剩余约{' '}
+              {(attachmentQuotaSummary.remainingBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB
+              {attachmentQuotaSummary.exceeded ? '（已达或超过配额）' : ''}
+              {!attachmentQuotaSummary.exceeded && attachmentQuotaSummary.warnLowRemaining ? '（剩余不足 500MB）' : ''}
+            </Typography.Text>
+          ) : null}
+          <Form form={attachmentQuotaForm} layout="vertical" preserve={false}>
+            <Form.Item
+              name="quotaGiB"
+              label="总容量上限（GiB）"
+              rules={[
+                { required: true, message: '请输入容量' },
+                () => ({
+                  validator(_, value) {
+                    const n = Number(value)
+                    if (!Number.isFinite(n) || n < 1 / 1024 || n > 1024) {
+                      return Promise.reject(new Error('须在约 0.001～1024 GiB 之间'))
+                    }
+                    return Promise.resolve()
+                  },
+                }),
+              ]}
+            >
+              <InputNumber min={0.001} max={1024} step={0.25} style={{ width: '100%' }} placeholder="如 5" />
+            </Form.Item>
+          </Form>
+          <Space wrap>
+            <Button type="default" loading={attachmentQuotaSaveLoading} onClick={() => void saveAttachmentQuota()}>
+              保存附件容量
+            </Button>
+            <Button type="default" loading={attachmentSyncPreviewLoading} onClick={() => void runAttachmentSyncPreview()}>
+              预览磁盘对账
+            </Button>
+          </Space>
         </div>
         <div>
           <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>解析设置</Typography.Text>
@@ -1134,6 +1361,139 @@ const LayoutWithMenu: React.FC = () => {
             保存解析设置
           </Button>
         </div>
+      </Modal>
+      <Modal
+        title="附件磁盘对账预览"
+        open={attachmentSyncPreviewModalOpen}
+        onCancel={() => setAttachmentSyncPreviewModalOpen(false)}
+        width={760}
+        footer={[
+          <Button key="close" onClick={() => setAttachmentSyncPreviewModalOpen(false)}>
+            关闭
+          </Button>,
+          <Button key="sync" type="primary" onClick={() => openAttachmentSyncConfirm()}>
+            执行同步（二次确认）
+          </Button>,
+        ]}
+      >
+        {attachmentSyncPreviewData ? (
+          <>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
+              数据根目录：<Typography.Text code>{attachmentSyncPreviewData.dataDir}</Typography.Text>
+              。仅递归统计下列子目录（与系统附件配额统计口径一致），不包含 data 下其它目录（如 recycle、导出缓存等）。
+            </Typography.Paragraph>
+            <Typography.Paragraph style={{ marginBottom: 8 }}>
+              <Typography.Text strong>本次扫描的目录及汇总</Typography.Text>
+              <ul style={{ margin: '4px 0 0', paddingLeft: 20, fontSize: 12 }}>
+                {attachmentSyncPreviewData.scannedSubdirs.map((d) => (
+                  <li key={d}>
+                    <Typography.Text code>{d}</Typography.Text>
+                  </li>
+                ))}
+              </ul>
+            </Typography.Paragraph>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+              预览令牌有效期至 {attachmentSyncPreviewData.previewExpiresAt}。合计：磁盘{' '}
+              {(attachmentSyncPreviewData.diskTotalBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB；库表 file_size 之和{' '}
+              {(attachmentSyncPreviewData.dbTotalBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB；差值（磁盘−库）{' '}
+              {(attachmentSyncPreviewData.deltaBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB。盘上无库记录的文件约{' '}
+              {attachmentSyncPreviewData.orphanDiskCount} 个；库有记录但文件不存在约 {attachmentSyncPreviewData.missingOnDiskCount} 条。
+            </Typography.Paragraph>
+            {attachmentSyncPreviewData.warnings?.length ? (
+              <Typography.Paragraph type="warning" style={{ fontSize: 12 }}>
+                {attachmentSyncPreviewData.warnings.join('；')}
+              </Typography.Paragraph>
+            ) : null}
+            <Table
+              size="small"
+              pagination={false}
+              rowKey="key"
+              columns={attachmentSyncPreviewColumns}
+              dataSource={attachmentSyncPreviewData.rows}
+              style={{ marginBottom: 12 }}
+            />
+            {attachmentSyncPreviewData.orphanDiskSample.length ? (
+              <Typography.Paragraph style={{ fontSize: 12 }}>
+                <Typography.Text strong>孤儿文件样例（最多 {attachmentSyncPreviewData.orphanDiskSample.length} 条）：</Typography.Text>
+                <div style={{ maxHeight: 120, overflow: 'auto', marginTop: 4 }}>
+                  {attachmentSyncPreviewData.orphanDiskSample.map((p) => (
+                    <div key={p}>
+                      <Typography.Text code style={{ fontSize: 11 }}>
+                        {p}
+                      </Typography.Text>
+                    </div>
+                  ))}
+                </div>
+              </Typography.Paragraph>
+            ) : null}
+            {attachmentSyncPreviewData.missingOnDiskSample.length ? (
+              <Typography.Paragraph style={{ fontSize: 12 }}>
+                <Typography.Text strong>库有路径但磁盘缺失样例：</Typography.Text>
+                <div style={{ maxHeight: 120, overflow: 'auto', marginTop: 4 }}>
+                  {attachmentSyncPreviewData.missingOnDiskSample.map((p) => (
+                    <div key={p}>
+                      <Typography.Text code style={{ fontSize: 11 }}>
+                        {p}
+                      </Typography.Text>
+                    </div>
+                  ))}
+                </div>
+              </Typography.Paragraph>
+            ) : null}
+          </>
+        ) : null}
+      </Modal>
+      <Modal
+        title="二次确认：附件同步"
+        open={attachmentSyncConfirmOpen}
+        onCancel={() => setAttachmentSyncConfirmOpen(false)}
+        width={560}
+        destroyOnClose
+        okText="确认执行"
+        okButtonProps={{ danger: true, loading: attachmentSyncApplyLoading }}
+        onOk={async () => {
+          const ok = await submitAttachmentSyncApply()
+          if (!ok) return Promise.reject(new Error('sync-aborted'))
+        }}
+      >
+        {attachmentSyncPreviewData ? (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+              将按与上一步预览<strong>相同</strong>的目录与汇总执行；若期间有新上传或删除，服务器会拒绝执行（请重新预览）。请再次核对下列数字：
+            </Typography.Paragraph>
+            <Typography.Text style={{ fontSize: 12 }}>
+              磁盘合计 {(attachmentSyncPreviewData.diskTotalBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB；库合计{' '}
+              {(attachmentSyncPreviewData.dbTotalBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB；差值{' '}
+              {(attachmentSyncPreviewData.deltaBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB。
+            </Typography.Text>
+            <div>
+              <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+                同步方向
+              </Typography.Text>
+              <Radio.Group value={attachmentSyncMode} onChange={(e) => setAttachmentSyncMode(e.target.value)}>
+                <Space direction="vertical">
+                  <Radio value="disk">
+                    以磁盘为准：仅把库中 file_size 更新为磁盘文件实际大小（文件缺失的库行不删除、不修改）
+                  </Radio>
+                  <Radio value="db">
+                    以库为准：将上述扫描目录下、库中无任何 file_path 对应的文件移入 data/recycle（不直接删除表记录）
+                  </Radio>
+                </Space>
+              </Radio.Group>
+            </div>
+            <div>
+              <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+                当前登录密码
+              </Typography.Text>
+              <Input.Password
+                value={attachmentSyncApplyPassword}
+                onChange={(e) => setAttachmentSyncApplyPassword(e.target.value)}
+                placeholder="用于确认敏感操作"
+                autoComplete="off"
+              />
+            </div>
+          </Space>
+        ) : null}
       </Modal>
       <PageContainer>
         <Suspense

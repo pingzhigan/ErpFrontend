@@ -351,6 +351,74 @@
   height: auto;
 }
 
+/* 研发文档弹窗：左预览 · 右编辑 */
+.rd-doc-rich-split {
+  margin-top: 4px;
+}
+.rd-doc-rich-split__panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 440px;
+  max-height: min(520px, calc(85vh - 220px));
+  border: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--ant-colorFillAlter, #fafafa);
+}
+.rd-doc-rich-split__panel--editor {
+  background: #fff;
+}
+.rd-doc-rich-split__panel-head {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
+  background: linear-gradient(180deg, rgba(22, 119, 255, 0.04) 0%, transparent 100%);
+}
+.rd-doc-rich-split__panel--editor .rd-doc-rich-split__panel-head {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.03) 0%, transparent 100%);
+}
+.rd-doc-rich-split__panel-sub {
+  font-size: 12px;
+  line-height: 1.45;
+}
+.rd-doc-rich-split__preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px 18px;
+  font-size: 14px;
+  line-height: 1.65;
+  background: #fcfcfd;
+  border-radius: 0;
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  border-radius: 0;
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-shell > *:last-child {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-menubar {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-prosemirror {
+  flex: 1;
+  min-height: 220px;
+  max-height: none;
+}
+
 /* 研发待办 TipTap 编辑区 */
 .rd-tiptap-shell {
   position: relative;
@@ -457,4 +525,152 @@
   max-width: 100%;
   height: auto;
   vertical-align: middle;
+}
+
+/* 研发待办：筛选分段器与状态标签 */
+.rd-todo-filter-segmented .ant-segmented-item-selected .rd-todo-seg-open {
+  color: #1677ff;
+}
+.rd-todo-filter-segmented .ant-segmented-item-selected .rd-todo-seg-done {
+  color: #52c41a;
+}
+.rd-todo-filter-segmented .rd-todo-seg-open {
+  color: rgba(0, 0, 0, 0.65);
+}
+.rd-todo-filter-segmented .rd-todo-seg-done {
+  color: rgba(0, 0, 0, 0.65);
+}
+.rd-todo-status-tag.ant-tag {
+  margin-inline-end: 0;
+}
+
+/* 研发待办：页面工具栏与表格层次 */
+.rd-todo-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.rd-todo-toolbar .rd-todo-toolbar-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rd-todo-toolbar .rd-todo-toolbar-search.ant-input-search {
+  flex: 1;
+  min-width: 200px;
+  max-width: 440px;
+}
+
+.rd-todo-page-table .ant-table-thead > tr > th {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.rd-todo-page-table .ant-table-row.rd-todo-row-done > .ant-table-cell {
+  background: #fafafa;
+}
+
+.rd-todo-page-table .ant-table-tbody > tr:hover > .ant-table-cell {
+  background: #f0f7ff !important;
+}
+
+.rd-todo-page-table .ant-table-row.rd-todo-row-done:hover > .ant-table-cell {
+  background: #f0f5f9 !important;
+}
+
+.rd-todo-cell-task {
+  min-width: 0;
+}
+
+.rd-todo-actions .ant-btn {
+  padding-inline: 6px;
+}
+
+/* 研发待办：卡片网格与状态色 */
+.rd-todo-card.ant-card {
+  border-radius: 10px;
+  border: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+.rd-todo-card.ant-card:hover {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+}
+.rd-todo-card.ant-card:hover .rd-todo-card__watermark {
+  opacity: 0.12;
+}
+.rd-todo-card--done.ant-card:hover .rd-todo-card__watermark {
+  opacity: 0.12;
+}
+.rd-todo-card--open.ant-card {
+  border-left: 4px solid var(--ant-colorPrimary, #1677ff);
+  background:
+    radial-gradient(ellipse 95% 70% at 100% 32%, rgba(22, 119, 255, 0.14) 0%, transparent 58%),
+    linear-gradient(152deg, rgba(22, 119, 255, 0.07) 0%, var(--ant-colorBgContainer, #fff) 38%, #f5f9ff 100%);
+}
+.rd-todo-card--done.ant-card {
+  border-left: 4px solid var(--ant-colorSuccess, #52c41a);
+  background:
+    radial-gradient(ellipse 95% 70% at 100% 32%, rgba(82, 196, 26, 0.13) 0%, transparent 58%),
+    linear-gradient(152deg, rgba(82, 196, 26, 0.08) 0%, var(--ant-colorBgContainer, #fff) 38%, #f6fff6 100%);
+}
+
+.rd-todo-card__wrap {
+  position: relative;
+  min-height: 0;
+}
+.rd-todo-card__watermark {
+  position: absolute;
+  right: -6px;
+  bottom: 56px;
+  font-size: 108px;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+  color: var(--ant-colorPrimary, #1677ff);
+  opacity: 0.08;
+}
+.rd-todo-card--done .rd-todo-card__watermark {
+  color: var(--ant-colorSuccess, #52c41a);
+  opacity: 0.09;
+}
+.rd-todo-card__fg {
+  position: relative;
+  z-index: 1;
+}
+
+/* 卡片主操作区：完成 / 跟踪 */
+.rd-todo-card__cta {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--ant-colorBorderSecondary, #f0f0f0);
+}
+.rd-todo-card__cta-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--ant-colorTextTertiary, rgba(0, 0, 0, 0.45));
+}
+
+/* 研发文档：左侧文件夹树面板 */
+.rd-doc-folder-tree-panel {
+  max-height: min(520px, calc(100vh - 280px));
+  overflow: auto;
+  padding: 8px 4px 8px 0;
+  border: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
+  border-radius: 8px;
+  background: var(--ant-colorFillAlter, #fafafa);
+}
+.rd-doc-folder-tree.ant-tree-show-line .ant-tree-indent-unit {
+  width: 16px;
+}
+.rd-doc-folder-tree .ant-tree-node-content-wrapper {
+  border-radius: 4px;
 }
