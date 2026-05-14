@@ -1,20 +1,28 @@
 /**
- * 研发管理 — 研发文档：文件夹树、文档（TipTap HTML）、预览；本页不提供文件上传入口。
+ * 研发管理 — 研发文档：文件夹树、文档（TipTap HTML）、独立阅读页路由预览；本页不提供文件上传入口；文档在页面内编辑（无弹层）；新建文档仅在保存时落库。
  */
 import { DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, FolderAddOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons'
 import type { DataNode } from 'antd/es/tree'
 import type { ColumnsType } from 'antd/es/table'
 import { App, Alert, Button, Card, Col, Form, Input, Modal, Popconfirm, Row, Select, Space, Table, Tree, Typography } from 'antd'
 import axios from 'axios'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { RdRichHtmlEditor, sanitizeRdRichPreviewHtml } from '../components/RdRichHtmlEditor'
+import { RdRichHtmlEditor, type RdRichHtmlEditorRef } from '../components/RdRichHtmlEditor'
+import { useAuth } from '../auth/AuthContext'
+import {
+  appendAccessTokenToImgPreviewUrls,
+  stripAccessTokenFromImgPreviewUrls,
+} from '../utils/rdRichPreviewAuthUrls'
+import {
+  rdBodyHtmlContainsDataImage,
+  rdResolveBodyHtmlDataImages,
+  rdStripInlineDataImagesForCreate,
+} from '../utils/rdRichtextDataImages'
 
-const { Title, Text } = Typography
-
-/** 新建文档时先落库的占位标题（与后端草稿一致，取消且未编辑时可删草稿） */
-const RICHTEXT_DRAFT_TITLE = '未命名文档'
+const { Text } = Typography
 
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n < 0) return '0 B'
@@ -22,15 +30,6 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
-}
-
-function isBlankRichBody(html: string): boolean {
-  const plain = String(html ?? '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return plain.length === 0
 }
 
 type FolderRow = { id: number; parent_id: number | null; name: string; created_at: string }
@@ -55,13 +54,42 @@ export type RdRichtextListRow = {
   updated_at: string
   created_by: string | null
   updated_by: string | null
+  /** doc-library 等列表：正文内嵌图 + HTML 近似占用（字节） */
+  storage_bytes?: number
 }
 
 type UnifiedRow =
-  | { key: string; kind: 'file'; sortAt: string; file: RdDocFileRow }
-  | { key: string; kind: 'richtext'; sortAt: string; doc: RdRichtextListRow }
+  | { key: string; kind: 'file'; sortAt: string; file: RdDocFileRow; folder_name?: string }
+  | { key: string; kind: 'richtext'; sortAt: string; doc: RdRichtextListRow; folder_name?: string }
 
-type PreviewState = { kind: 'file'; file: RdDocFileRow } | { kind: 'richtext'; id: number; title: string }
+const RD_LIBRARY_PAGE_SIZE = 30
+
+type RdDocLibraryItem =
+  | { kind: 'file'; folder_name: string; file: RdDocFileRow }
+  | { kind: 'richtext'; folder_name: string; doc: RdRichtextListRow }
+
+function mapLibraryItemsToUnifiedRows(list: RdDocLibraryItem[]): UnifiedRow[] {
+  return list.map((item) => {
+    if (item.kind === 'file') {
+      return {
+        key: `f-${item.file.id}`,
+        kind: 'file',
+        sortAt: item.file.created_at,
+        file: item.file,
+        folder_name: item.folder_name,
+      }
+    }
+    return {
+      key: `r-${item.doc.id}`,
+      kind: 'richtext',
+      sortAt: item.doc.updated_at,
+      doc: item.doc,
+      folder_name: item.folder_name,
+    }
+  })
+}
+
+type PreviewState = { kind: 'file'; file: RdDocFileRow }
 
 function folderPathLabel(folders: FolderRow[], id: number): string {
   const byId = new Map(folders.map((f) => [f.id, f]))
@@ -104,13 +132,16 @@ function buildTreeData(folders: FolderRow[]): DataNode[] {
 
 const RdResearchDocsPage: React.FC = () => {
   const { message: msg } = App.useApp()
+  const { user } = useAuth()
+  const navigate = useNavigate()
   const [folders, setFolders] = useState<FolderRow[]>([])
   const [loadingFolders, setLoadingFolders] = useState(false)
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null)
   const [folderExpandedKeys, setFolderExpandedKeys] = useState<React.Key[]>([])
 
-  const [files, setFiles] = useState<RdDocFileRow[]>([])
-  const [richtextDocs, setRichtextDocs] = useState<RdRichtextListRow[]>([])
+  const [libraryPage, setLibraryPage] = useState(1)
+  const [libraryTotal, setLibraryTotal] = useState(0)
+  const [libraryRows, setLibraryRows] = useState<UnifiedRow[]>([])
   const [loadingFiles, setLoadingFiles] = useState(false)
 
   const [folderModalOpen, setFolderModalOpen] = useState(false)
@@ -124,10 +155,13 @@ const RdResearchDocsPage: React.FC = () => {
   const [previewText, setPreviewText] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
 
-  const [richModalOpen, setRichModalOpen] = useState(false)
+  const [richEditorOpen, setRichEditorOpen] = useState(false)
   const [richEditingId, setRichEditingId] = useState<number | null>(null)
   const [richTitleForm] = Form.useForm<{ title: string }>()
+  /** 与 richEditorMountKey 一起作为 Form key，挂载时写入标题（条件渲染下 setFieldsValue 不可靠） */
+  const [richTitleInitial, setRichTitleInitial] = useState('')
   const [richBodyHtml, setRichBodyHtml] = useState('')
+  const richEditorRef = useRef<RdRichHtmlEditorRef>(null)
   const [richEditorMountKey, setRichEditorMountKey] = useState(0)
   const [richDraftMode, setRichDraftMode] = useState(false)
   const [storageUsage, setStorageUsage] = useState<{
@@ -196,57 +230,44 @@ const RdResearchDocsPage: React.FC = () => {
     setFolderExpandedKeys(folders.map((f) => String(f.id)))
   }, [folders])
 
-  const loadFiles = useCallback(
-    async (folderId: number) => {
-      setLoadingFiles(true)
-      try {
-        const [fRes, rRes] = await Promise.all([
-          axios.get<{ list: RdDocFileRow[] }>(`/api/rd/doc-folders/${folderId}/files`),
-          axios.get<{ list: RdRichtextListRow[] }>(`/api/rd/doc-folders/${folderId}/richtext-docs`),
-        ])
-        setFiles(fRes.data?.list ?? [])
-        setRichtextDocs(rRes.data?.list ?? [])
-      } catch (e: unknown) {
-        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '加载失败')
-        setFiles([])
-        setRichtextDocs([])
-      } finally {
-        setLoadingFiles(false)
-      }
-    },
-    [msg],
-  )
+  const loadLibraryPage = useCallback(async (folderId: number | null, page: number) => {
+    setLoadingFiles(true)
+    try {
+      const params: Record<string, string | number> = { page, page_size: RD_LIBRARY_PAGE_SIZE }
+      if (folderId != null) params.folder_id = folderId
+      const res = await axios.get<{ list: RdDocLibraryItem[]; total: number }>('/api/rd/doc-library', { params })
+      setLibraryRows(mapLibraryItemsToUnifiedRows(res.data?.list ?? []))
+      setLibraryTotal(Number(res.data?.total ?? 0) || 0)
+    } catch (e: unknown) {
+      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '加载失败')
+      setLibraryRows([])
+      setLibraryTotal(0)
+    } finally {
+      setLoadingFiles(false)
+    }
+  }, [msg])
 
   useEffect(() => {
-    if (selectedFolderId != null) void loadFiles(selectedFolderId)
-    else {
-      setFiles([])
-      setRichtextDocs([])
-    }
-  }, [selectedFolderId, loadFiles])
+    void loadLibraryPage(selectedFolderId, libraryPage)
+  }, [selectedFolderId, libraryPage, loadLibraryPage])
 
-  const unifiedRows = useMemo((): UnifiedRow[] => {
-    const rows: UnifiedRow[] = [
-      ...files.map((f) => ({
-        key: `f-${f.id}`,
-        kind: 'file' as const,
-        sortAt: f.created_at,
-        file: f,
-      })),
-      ...richtextDocs.map((d) => ({
-        key: `r-${d.id}`,
-        kind: 'richtext' as const,
-        sortAt: d.updated_at,
-        doc: d,
-      })),
-    ]
-    rows.sort((a, b) => (a.sortAt < b.sortAt ? 1 : a.sortAt > b.sortAt ? -1 : 0))
-    return rows
-  }, [files, richtextDocs])
+  /** 标题 Form 条件挂载：在布局提交后再写一次，避免 initialValues 与 form 实例组合时偶发不同步 */
+  useLayoutEffect(() => {
+    if (!richEditorOpen) return
+    richTitleForm.setFieldsValue({ title: richTitleInitial })
+  }, [richEditorOpen, richEditorMountKey, richTitleInitial, richTitleForm])
 
   const treeData = useMemo(() => buildTreeData(folders), [folders])
 
+  const defaultRootFolderId = useMemo(() => {
+    const r = folders.find((f) => f.parent_id == null && f.name === '研发文档')
+    return r?.id ?? null
+  }, [folders])
+
+  const effectiveFolderId = selectedFolderId ?? defaultRootFolderId
+
   const onTreeSelect = (keys: React.Key[]) => {
+    setLibraryPage(1)
     const k = keys[0]
     if (k == null) {
       setSelectedFolderId(null)
@@ -305,6 +326,7 @@ const RdResearchDocsPage: React.FC = () => {
       }
       setFolderModalOpen(false)
       void loadFolders()
+      void loadLibraryPage(selectedFolderId, libraryPage)
     } catch (e: unknown) {
       if ((e as { errorFields?: unknown })?.errorFields) return
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存失败')
@@ -317,6 +339,7 @@ const RdResearchDocsPage: React.FC = () => {
       await axios.delete(`/api/rd/doc-folders/${selectedFolderId}`)
       msg.success('已删除')
       setSelectedFolderId(null)
+      setLibraryPage(1)
       void loadFolders()
     } catch (e: unknown) {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '删除失败')
@@ -350,29 +373,17 @@ const RdResearchDocsPage: React.FC = () => {
     [openPdfInNewTab],
   )
 
-  const openPreviewRichtext = useCallback((doc: RdRichtextListRow) => {
-    setPreview({ kind: 'richtext', id: doc.id, title: doc.title })
-    setPreviewOpen(true)
-    setPreviewObjectUrl(null)
-    setPreviewText('')
-  }, [])
+  const openPreviewRichtext = useCallback(
+    (doc: RdRichtextListRow) => {
+      navigate(`/rd/docs/preview/${doc.id}`)
+    },
+    [navigate],
+  )
 
   useEffect(() => {
     if (!previewOpen || !preview) return
     let objectUrl: string | null = null
     setPreviewLoading(true)
-    if (preview.kind === 'richtext') {
-      axios
-        .get<{ body_html: string }>(`/api/rd/richtext-docs/${preview.id}`)
-        .then((res) => {
-          setPreviewText(typeof res.data?.body_html === 'string' ? res.data.body_html : '')
-        })
-        .catch(() => msg.error('预览加载失败'))
-        .finally(() => setPreviewLoading(false))
-      return () => {
-        if (objectUrl) window.URL.revokeObjectURL(objectUrl)
-      }
-    }
     const file = preview.file
     if (file.file_type === 'pdf') {
       setPreviewLoading(false)
@@ -433,7 +444,7 @@ const RdResearchDocsPage: React.FC = () => {
     try {
       await axios.delete(`/api/rd/doc-files/${file.id}`)
       msg.success('已删除')
-      if (selectedFolderId != null) void loadFiles(selectedFolderId)
+      void loadLibraryPage(selectedFolderId, libraryPage)
       void loadFolders()
       void loadStorageUsage()
     } catch (e: unknown) {
@@ -445,7 +456,7 @@ const RdResearchDocsPage: React.FC = () => {
     try {
       await axios.delete(`/api/rd/richtext-docs/${id}`)
       msg.success('已删除')
-      if (selectedFolderId != null) void loadFiles(selectedFolderId)
+      void loadLibraryPage(selectedFolderId, libraryPage)
       void loadFolders()
       void loadStorageUsage()
     } catch (e: unknown) {
@@ -453,109 +464,83 @@ const RdResearchDocsPage: React.FC = () => {
     }
   }
 
+  const uploadRichBodyImageForDocId = useCallback(
+    async (docId: number, file: File) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await axios.post<{ id: number; url: string }>(`/api/rd/richtext-docs/${docId}/body-images`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      void loadStorageUsage()
+      const url = res.data?.url ?? ''
+      if (!url) throw new Error('上传未返回图片地址')
+      return url
+    },
+    [loadStorageUsage],
+  )
+
   const uploadRichBodyImage = useCallback(
     async (file: File) => {
       if (richEditingId == null) {
         msg.error('文档未就绪，请稍候再试')
         throw new Error('no id')
       }
-      const fd = new FormData()
-      fd.append('file', file)
       try {
-        const res = await axios.post<{ id: number; url: string }>(`/api/rd/richtext-docs/${richEditingId}/body-images`, fd, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        })
-        void loadStorageUsage()
-        const url = res.data?.url ?? ''
-        if (!url) throw new Error('上传未返回图片地址')
-        return url
+        return await uploadRichBodyImageForDocId(richEditingId, file)
       } catch (e: unknown) {
         const m =
           (e as { response?: { data?: { message?: string } } })?.response?.data?.message ??
           (e instanceof Error ? e.message : '上传失败')
         msg.error(m)
-        throw new Error(m)
+        throw e
       }
     },
-    [richEditingId, msg, loadStorageUsage],
+    [richEditingId, msg, uploadRichBodyImageForDocId],
   )
 
-  const openCreateRichtext = async () => {
-    if (selectedFolderId == null) {
-      msg.warning('请先选择文件夹')
+  const openCreateRichtext = () => {
+    if (effectiveFolderId == null) {
+      msg.warning('未找到默认根目录「研发文档」，请刷新页面或联系管理员')
       return
     }
     setRichDraftMode(true)
-    try {
-      const res = await axios.post<{ id: number; title: string; body_html: string }>(
-        `/api/rd/doc-folders/${selectedFolderId}/richtext-docs`,
-        { title: RICHTEXT_DRAFT_TITLE, body_html: '<p></p>' },
-      )
-      const newId = res.data?.id
-      if (!Number.isInteger(newId) || newId < 1) {
-        msg.error('创建草稿失败')
-        setRichDraftMode(false)
-        return
-      }
-      setRichEditingId(newId)
-      setRichBodyHtml(res.data?.body_html ?? '<p></p>')
-      setRichEditorMountKey((k) => k + 1)
-      richTitleForm.resetFields()
-      richTitleForm.setFieldsValue({ title: res.data?.title ?? RICHTEXT_DRAFT_TITLE })
-      setRichModalOpen(true)
-      void loadFiles(selectedFolderId)
-      void loadStorageUsage()
-    } catch (e: unknown) {
-      setRichDraftMode(false)
-      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '创建失败')
-    }
+    setRichEditingId(null)
+    setRichTitleInitial('')
+    setRichBodyHtml('<p></p>')
+    setRichEditorMountKey((k) => k + 1)
+    setRichEditorOpen(true)
   }
 
   const openEditRichtext = async (doc: RdRichtextListRow) => {
     setRichDraftMode(false)
     try {
       const res = await axios.get<{ title: string; body_html: string }>(`/api/rd/richtext-docs/${doc.id}`)
+      const title = res.data?.title ?? doc.title
+      setRichTitleInitial(title)
       setRichEditingId(doc.id)
-      setRichBodyHtml(res.data?.body_html ?? '')
+      setRichBodyHtml(appendAccessTokenToImgPreviewUrls(res.data?.body_html ?? '', user?.token))
       setRichEditorMountKey((k) => k + 1)
-      richTitleForm.setFieldsValue({ title: res.data?.title ?? doc.title })
-      setRichModalOpen(true)
+      setRichEditorOpen(true)
     } catch (e: unknown) {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '加载失败')
     }
   }
 
   const closeRichModal = () => {
-    setRichModalOpen(false)
+    setRichEditorOpen(false)
     setRichEditingId(null)
     setRichBodyHtml('')
     setRichDraftMode(false)
   }
 
-  const handleRichModalCancel = async () => {
-    if (richDraftMode && richEditingId != null) {
-      const t = String(richTitleForm.getFieldValue('title') ?? '').trim()
-      if (t === RICHTEXT_DRAFT_TITLE && isBlankRichBody(richBodyHtml)) {
-        try {
-          await axios.delete(`/api/rd/richtext-docs/${richEditingId}`)
-        } catch {
-          /* ignore */
-        }
-      }
-    }
+  const handleRichModalCancel = () => {
     closeRichModal()
-    if (selectedFolderId != null) {
-      void loadFiles(selectedFolderId)
-      void loadStorageUsage()
-    }
+    void loadLibraryPage(selectedFolderId, libraryPage)
+    void loadStorageUsage()
   }
 
   const submitRichModal = async () => {
-    if (selectedFolderId == null) return
-    if (richEditingId == null) {
-      msg.error('文档未初始化')
-      return
-    }
+    if (effectiveFolderId == null) return
     try {
       const { title } = await richTitleForm.validateFields()
       const t = title.trim()
@@ -563,10 +548,51 @@ const RdResearchDocsPage: React.FC = () => {
         msg.error('请填写标题')
         return
       }
-      await axios.put(`/api/rd/richtext-docs/${richEditingId}`, { title: t, body_html: richBodyHtml })
+      const htmlSource = stripAccessTokenFromImgPreviewUrls(richEditorRef.current?.getHtml() ?? richBodyHtml)
+      const hasDataImg = rdBodyHtmlContainsDataImage(htmlSource)
+
+      if (richEditingId == null) {
+        if (hasDataImg) {
+          const stubHtml = rdStripInlineDataImagesForCreate(htmlSource)
+          const createRes = await axios.post<{ id: number; title: string; body_html: string }>(
+            `/api/rd/doc-folders/${effectiveFolderId}/richtext-docs`,
+            { title: t, body_html: stubHtml },
+          )
+          const newId = createRes.data?.id
+          if (!Number.isInteger(newId) || newId < 1) {
+            msg.error('创建失败')
+            return
+          }
+          try {
+            const bodyToSave = await rdResolveBodyHtmlDataImages(htmlSource, (file) => uploadRichBodyImageForDocId(newId, file))
+            await axios.put(`/api/rd/richtext-docs/${newId}`, { title: t, body_html: bodyToSave })
+          } catch (resolveErr) {
+            try {
+              await axios.put(`/api/rd/richtext-docs/${newId}`, { title: t, body_html: stubHtml })
+            } catch {
+              /* 回滚失败时忽略 */
+            }
+            msg.error(resolveErr instanceof Error ? resolveErr.message : '处理内联图片失败')
+            return
+          }
+        } else {
+          await axios.post(`/api/rd/doc-folders/${effectiveFolderId}/richtext-docs`, { title: t, body_html: htmlSource })
+        }
+      } else {
+        let bodyToSave = htmlSource
+        if (hasDataImg) {
+          try {
+            bodyToSave = await rdResolveBodyHtmlDataImages(htmlSource, uploadRichBodyImage)
+          } catch (resolveErr) {
+            msg.error(resolveErr instanceof Error ? resolveErr.message : '处理内联图片失败')
+            return
+          }
+        }
+        await axios.put(`/api/rd/richtext-docs/${richEditingId}`, { title: t, body_html: bodyToSave })
+      }
       msg.success('已保存')
       closeRichModal()
-      void loadFiles(selectedFolderId)
+      void loadLibraryPage(selectedFolderId, libraryPage)
       void loadFolders()
       void loadStorageUsage()
     } catch (e: unknown) {
@@ -593,7 +619,7 @@ const RdResearchDocsPage: React.FC = () => {
       msg.success('已移动')
       setMoveFileOpen(false)
       setMoveFileRow(null)
-      if (selectedFolderId != null) void loadFiles(selectedFolderId)
+      void loadLibraryPage(selectedFolderId, libraryPage)
       void loadFolders()
       void loadStorageUsage()
     } catch (e: unknown) {
@@ -615,98 +641,110 @@ const RdResearchDocsPage: React.FC = () => {
     [folders],
   )
 
-  const safeRichtextPreview = useMemo(() => sanitizeRdRichPreviewHtml(previewText), [previewText])
-
-  const unifiedColumns: ColumnsType<UnifiedRow> = [
-    {
-      title: '名称',
-      key: 'name',
-      ellipsis: true,
-      render: (_, row) => (row.kind === 'file' ? row.file.file_name : row.doc.title),
-    },
-    {
-      title: '类型',
-      key: 'type',
-      width: 100,
-      render: (_, row) => (row.kind === 'file' ? row.file.file_type : '文档'),
-    },
-    {
-      title: '大小',
-      key: 'meta',
-      width: 100,
-      render: (_, row) => (row.kind === 'file' ? `${Math.round((row.file.file_size || 0) / 1024)} KB` : '—'),
-    },
-    {
-      title: '时间',
-      key: 'time',
+  const unifiedColumns: ColumnsType<UnifiedRow> = (() => {
+    const folderCol: ColumnsType<UnifiedRow>[0] = {
+      title: '所在文件夹',
+      key: 'folder',
       width: 180,
-      render: (_, row) => (row.kind === 'file' ? row.file.created_at : row.doc.updated_at),
-    },
-    {
-      title: '操作',
-      key: 'op',
-      width: 260,
-      render: (_, row) =>
-        row.kind === 'file' ? (
-          <Space wrap>
-            <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openPreviewFile(row.file)}>
-              预览
-            </Button>
-            <Button type="link" size="small" icon={<DownloadOutlined />} onClick={() => void handleDownload(row.file)}>
-              下载
-            </Button>
-            <Button type="link" size="small" onClick={() => openMoveFile(row.file)}>
-              移动
-            </Button>
-            <Popconfirm title="确定删除？" onConfirm={() => void deleteFile(row.file)}>
-              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-                删除
+      ellipsis: true,
+      render: (_, row) => row.folder_name ?? '—',
+    }
+    const cols: ColumnsType<UnifiedRow> = [
+      {
+        title: '名称',
+        key: 'name',
+        ellipsis: true,
+        render: (_, row) => (row.kind === 'file' ? row.file.file_name : row.doc.title),
+      },
+      ...(selectedFolderId == null ? [folderCol] : []),
+      {
+        title: '类型',
+        key: 'type',
+        width: 100,
+        render: (_, row) => (row.kind === 'file' ? row.file.file_type : '文档'),
+      },
+      {
+        title: '大小',
+        key: 'meta',
+        width: 100,
+        render: (_, row) => {
+          if (row.kind === 'file') return `${Math.round((row.file.file_size || 0) / 1024)} KB`
+          const s = row.doc.storage_bytes ?? 0
+          return s > 0 ? formatBytes(s) : '—'
+        },
+      },
+      {
+        title: '时间',
+        key: 'time',
+        width: 180,
+        render: (_, row) => (row.kind === 'file' ? row.file.created_at : row.doc.updated_at),
+      },
+      {
+        title: '操作',
+        key: 'op',
+        width: 260,
+        render: (_, row) =>
+          row.kind === 'file' ? (
+            <Space wrap>
+              <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openPreviewFile(row.file)}>
+                预览
               </Button>
-            </Popconfirm>
-          </Space>
-        ) : (
-          <Space wrap>
-            <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openPreviewRichtext(row.doc)}>
-              预览
-            </Button>
-            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => void openEditRichtext(row.doc)}>
-              编辑
-            </Button>
-            <Button
-              type="link"
-              size="small"
-              icon={<DownloadOutlined />}
-              onClick={async () => {
-                try {
-                  const res = await axios.get<{ title: string; body_html: string }>(`/api/rd/richtext-docs/${row.doc.id}`)
-                  downloadRichtextHtml(res.data?.title ?? row.doc.title, res.data?.body_html ?? '')
-                } catch (e: unknown) {
-                  msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '下载失败')
-                }
-              }}
-            >
-              下载
-            </Button>
-            <Popconfirm title="确定删除？" onConfirm={() => void deleteRichtext(row.doc.id)}>
-              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-                删除
+              <Button type="link" size="small" icon={<DownloadOutlined />} onClick={() => void handleDownload(row.file)}>
+                下载
               </Button>
-            </Popconfirm>
-          </Space>
-        ),
-    },
-  ]
+              <Button type="link" size="small" onClick={() => openMoveFile(row.file)}>
+                移动
+              </Button>
+              <Popconfirm title="确定删除？" onConfirm={() => void deleteFile(row.file)}>
+                <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                  删除
+                </Button>
+              </Popconfirm>
+            </Space>
+          ) : (
+            <Space wrap>
+              <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openPreviewRichtext(row.doc)}>
+                预览
+              </Button>
+              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => void openEditRichtext(row.doc)}>
+                编辑
+              </Button>
+              <Button
+                type="link"
+                size="small"
+                icon={<DownloadOutlined />}
+                onClick={async () => {
+                  try {
+                    const res = await axios.get<{ title: string; body_html: string }>(`/api/rd/richtext-docs/${row.doc.id}`)
+                    downloadRichtextHtml(res.data?.title ?? row.doc.title, res.data?.body_html ?? '')
+                  } catch (e: unknown) {
+                    msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '下载失败')
+                  }
+                }}
+              >
+                下载
+              </Button>
+              <Popconfirm title="确定删除？" onConfirm={() => void deleteRichtext(row.doc.id)}>
+                <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                  删除
+                </Button>
+              </Popconfirm>
+            </Space>
+          ),
+      },
+    ]
+    return cols
+  })()
 
-  const previewTitle = preview?.kind === 'file' ? preview.file.file_name : preview?.title ?? '预览'
+  const previewTitle = preview?.file.file_name ?? '预览'
   const previewIsImage = preview?.kind === 'file' && preview.file.file_type === 'image'
+
+  const isDocsMainExpanded = richEditorOpen
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Title level={4} style={{ margin: 0 }}>
-        研发文档
-      </Title>
       {storageUsage != null ? (
-        <Text type="secondary" style={{ display: 'block', marginTop: -8 }}>
+        <Text type="secondary" style={{ display: 'block', marginTop: 0 }}>
           全系统附件剩余：<Text strong>{formatBytes(storageUsage.remainingBytes)}</Text>
           <span style={{ marginLeft: 8 }}>
             （已用 {formatBytes(storageUsage.usedBytes)} / 配额 {formatBytes(storageUsage.quotaBytes)}，含知识库、合同等已统计模块）
@@ -729,70 +767,168 @@ const RdResearchDocsPage: React.FC = () => {
           description="上传仍可继续；每次新增附件会向管理员发送提醒邮件，可在「系统设置」中查看配额与已用情况。"
         />
       ) : null}
-      <Row gutter={16}>
-        <Col xs={24} md={8} lg={7}>
-          <Card title="文件夹树" size="small" loading={loadingFolders} extra={<Button size="small" onClick={() => void loadFolders()}>刷新</Button>}>
-            <Space wrap style={{ marginBottom: 8 }}>
-              <Button type="primary" size="small" icon={<FolderAddOutlined />} onClick={openCreateFolder}>
-                新建
-              </Button>
-              <Button size="small" disabled={selectedFolderId == null} onClick={openRenameFolder}>
-                重命名
-              </Button>
-              <Button size="small" disabled={selectedFolderId == null} onClick={openMoveFolder}>
-                移动
-              </Button>
-              <Popconfirm title="删除该文件夹（须为空）？" disabled={selectedFolderId == null} onConfirm={() => void deleteSelectedFolder()}>
-                <Button size="small" danger disabled={selectedFolderId == null}>
-                  删除
+      <Row
+        gutter={16}
+        align="stretch"
+        className={`rd-docs-main-row${isDocsMainExpanded ? ' rd-docs-main-row--editor-only' : ''}`}
+      >
+        {!isDocsMainExpanded ? (
+          <Col xs={24} md={8} lg={7}>
+            <Card
+              className="rd-doc-folder-card"
+              title="文件夹树"
+              size="small"
+              loading={loadingFolders}
+              extra={<Button size="small" onClick={() => void loadFolders()}>刷新</Button>}
+              styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
+              style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+            >
+              <Space wrap style={{ marginBottom: 8, flexShrink: 0 }}>
+                <Button type="primary" size="small" icon={<FolderAddOutlined />} onClick={openCreateFolder}>
+                  新建
                 </Button>
-              </Popconfirm>
-            </Space>
-            <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
-              根目录与子文件夹以树线展示；点击节点选中，再于右侧管理文件。
-            </Text>
-            {treeData.length === 0 ? (
-              <Text type="secondary">暂无文件夹，点击「新建」在根目录创建。</Text>
-            ) : (
-              <div className="rd-doc-folder-tree-panel">
-                <Tree
-                  className="rd-doc-folder-tree"
-                  blockNode
-                  showLine
+                <Button size="small" disabled={selectedFolderId == null} onClick={openRenameFolder}>
+                  重命名
+                </Button>
+                <Button size="small" disabled={selectedFolderId == null} onClick={openMoveFolder}>
+                  移动
+                </Button>
+                <Popconfirm title="删除该文件夹（须为空）？" disabled={selectedFolderId == null} onConfirm={() => void deleteSelectedFolder()}>
+                  <Button size="small" danger disabled={selectedFolderId == null}>
+                    删除
+                  </Button>
+                </Popconfirm>
+              </Space>
+              <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 8, flexShrink: 0 }}>
+                根目录与子文件夹以树线展示，点选文件夹后仅显示该目录下内容。
+              </Text>
+              <Space style={{ marginBottom: 8, flexShrink: 0 }}>
+                <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => onTreeSelect([])}>
+                  全部文档
+                </Button>
+              </Space>
+              {treeData.length === 0 ? (
+                <Text type="secondary" style={{ flex: 1 }}>
+                  暂无文件夹，点击「新建」在根目录创建。
+                </Text>
+              ) : (
+                <div className="rd-doc-folder-tree-panel">
+                  <Tree
+                    className="rd-doc-folder-tree"
+                    blockNode
+                    showLine
+                    showIcon
+                    expandedKeys={folderExpandedKeys}
+                    onExpand={(keys) => setFolderExpandedKeys(keys as React.Key[])}
+                    selectedKeys={selectedFolderId != null ? [String(selectedFolderId)] : []}
+                    treeData={treeData}
+                    onSelect={onTreeSelect}
+                  />
+                </div>
+              )}
+            </Card>
+          </Col>
+        ) : null}
+        <Col xs={24} md={isDocsMainExpanded ? 24 : 16} lg={isDocsMainExpanded ? 24 : 17}>
+          {richEditorOpen ? (
+            <Card
+              className="rd-doc-rich-inline-card rd-doc-main-col-card"
+              title={richDraftMode ? '新建文档' : '编辑文档'}
+              size="small"
+              styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
+              style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+              extra={
+                <Space>
+                  {richEditingId != null ? (
+                    <Button
+                      onClick={() => window.open(`/rd/docs/preview/${richEditingId}`, '_blank', 'noopener,noreferrer')}
+                    >
+                      阅读预览
+                    </Button>
+                  ) : null}
+                  <Button onClick={handleRichModalCancel}>取消</Button>
+                  <Button type="primary" onClick={() => void submitRichModal()}>
+                    保存
+                  </Button>
+                </Space>
+              }
+            >
+              {richDraftMode && richEditingId == null ? (
+                <Alert
+                  type="info"
                   showIcon
-                  expandedKeys={folderExpandedKeys}
-                  onExpand={(keys) => setFolderExpandedKeys(keys as React.Key[])}
-                  selectedKeys={selectedFolderId != null ? [String(selectedFolderId)] : []}
-                  treeData={treeData}
-                  onSelect={onTreeSelect}
+                  style={{ flexShrink: 0, marginBottom: 8 }}
+                  message="新建与保存"
+                  description="保存前不会在列表中产生记录。点击「保存」将创建文档；正文里粘贴产生的内联图（data:image）会在保存时自动上传并替换为服务器地址。也推荐使用工具栏插入图片。"
+                />
+              ) : null}
+              <Form
+                form={richTitleForm}
+                key={`rich-doc-title-${richEditorMountKey}`}
+                layout="vertical"
+                preserve={false}
+                initialValues={{ title: richTitleInitial }}
+                style={{ flexShrink: 0 }}
+              >
+                <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
+                  <Input placeholder="文档标题" size="large" />
+                </Form.Item>
+              </Form>
+
+              <div className="rd-doc-rich-editor-only rd-doc-rich-split--fill">
+                <div className="rd-doc-rich-split__panel rd-doc-rich-split__panel--editor rd-doc-rich-editor-only__panel">
+                  <div className="rd-doc-rich-split__panel-head">
+                    <Text strong>正文编辑</Text>
+                    <Text type="secondary" className="rd-doc-rich-split__panel-sub">
+                      {richDraftMode && richEditingId == null
+                        ? '保存时会自动上传正文中的内联图；工具栏插入图片可直接写入服务器'
+                        : 'TipTap 富文本，支持粘贴截图与图片；可点右上角「阅读预览」在独立页面查看排版'}
+                    </Text>
+                  </div>
+                  <RdRichHtmlEditor
+                    ref={richEditorRef}
+                    mountKey={richEditorMountKey}
+                    html={richBodyHtml}
+                    onChange={setRichBodyHtml}
+                    uploadImage={richEditingId != null ? uploadRichBodyImage : undefined}
+                    previewAccessToken={user?.token}
+                    placeholder="在此编写正文…"
+                  />
+                </div>
+              </div>
+            </Card>
+          ) : (
+            <Card
+              className="rd-doc-files-card rd-doc-main-col-card"
+              title="文件与文档"
+              size="small"
+              styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
+              style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+              extra={
+                <Button type="primary" size="small" icon={<PlusOutlined />} disabled={effectiveFolderId == null} onClick={openCreateRichtext}>
+                  新建文档
+                </Button>
+              }
+            >
+              <div className="rd-doc-files-table-wrap" style={{ flex: 1, minHeight: 0 }}>
+                <Table<UnifiedRow>
+                  rowKey="key"
+                  size="small"
+                  loading={loadingFiles}
+                  columns={unifiedColumns}
+                  dataSource={libraryRows}
+                  pagination={{
+                    current: libraryPage,
+                    pageSize: RD_LIBRARY_PAGE_SIZE,
+                    total: libraryTotal,
+                    showSizeChanger: false,
+                    showTotal: (t) => `共 ${t} 条`,
+                    onChange: (p) => setLibraryPage(p),
+                  }}
                 />
               </div>
-            )}
-          </Card>
-        </Col>
-        <Col xs={24} md={16} lg={17}>
-          <Card
-            title="文件与文档"
-            size="small"
-            extra={
-              <Button type="primary" size="small" icon={<PlusOutlined />} disabled={selectedFolderId == null} onClick={openCreateRichtext}>
-                新建文档
-              </Button>
-            }
-          >
-            {selectedFolderId == null ? (
-              <Text type="secondary">请先在左侧文件夹树中选中一个节点。</Text>
-            ) : (
-              <Table<UnifiedRow>
-                rowKey="key"
-                size="small"
-                loading={loadingFiles}
-                columns={unifiedColumns}
-                dataSource={unifiedRows}
-                pagination={false}
-              />
-            )}
-          </Card>
+            </Card>
+          )}
         </Col>
       </Row>
 
@@ -826,62 +962,6 @@ const RdResearchDocsPage: React.FC = () => {
       </Modal>
 
       <Modal
-        title={richDraftMode ? '新建文档' : '编辑文档'}
-        open={richModalOpen}
-        onOk={() => void submitRichModal()}
-        onCancel={() => void handleRichModalCancel()}
-        width={1120}
-        destroyOnHidden
-        styles={{ body: { paddingTop: 12, paddingBottom: 8 } }}
-        afterOpenChange={(open) => {
-          if (!open) return
-          if (richEditingId == null) {
-            richTitleForm.resetFields()
-            richTitleForm.setFieldsValue({ title: '' })
-          }
-        }}
-      >
-        <Form form={richTitleForm} layout="vertical" preserve={false}>
-          <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
-            <Input placeholder="文档标题" size="large" />
-          </Form.Item>
-        </Form>
-        <Row gutter={[16, 16]} className="rd-doc-rich-split">
-          <Col xs={24} lg={10} xl={9}>
-            <div className="rd-doc-rich-split__panel">
-              <div className="rd-doc-rich-split__panel-head">
-                <Text strong>预览</Text>
-                <Text type="secondary" className="rd-doc-rich-split__panel-sub">
-                  左侧实时预览，与右侧编辑同步
-                </Text>
-              </div>
-              <div
-                className="rd-rich-html-preview rd-doc-rich-split__preview-body"
-                dangerouslySetInnerHTML={{ __html: sanitizeRdRichPreviewHtml(richBodyHtml) }}
-              />
-            </div>
-          </Col>
-          <Col xs={24} lg={14} xl={15}>
-            <div className="rd-doc-rich-split__panel rd-doc-rich-split__panel--editor">
-              <div className="rd-doc-rich-split__panel-head">
-                <Text strong>编辑</Text>
-                <Text type="secondary" className="rd-doc-rich-split__panel-sub">
-                  TipTap 富文本，支持粘贴截图与图片
-                </Text>
-              </div>
-              <RdRichHtmlEditor
-                mountKey={richEditorMountKey}
-                html={richBodyHtml}
-                onChange={setRichBodyHtml}
-                uploadImage={richEditingId != null ? uploadRichBodyImage : undefined}
-                placeholder="在此编写正文…"
-              />
-            </div>
-          </Col>
-        </Row>
-      </Modal>
-
-      <Modal
         title={previewTitle}
         open={previewOpen}
         onCancel={closePreview}
@@ -904,13 +984,6 @@ const RdResearchDocsPage: React.FC = () => {
               </div>
             )}
           </>
-        )}
-        {!previewLoading && preview?.kind === 'richtext' && (
-          <div
-            className="rd-rich-html-preview"
-            style={{ padding: '20px 24px', margin: 0, maxHeight: '80vh', overflow: 'auto' }}
-            dangerouslySetInnerHTML={{ __html: safeRichtextPreview }}
-          />
         )}
       </Modal>
     </Space>

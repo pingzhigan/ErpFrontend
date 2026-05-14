@@ -51,6 +51,7 @@ import {
   ExperimentOutlined,
   FolderOutlined,
   HistoryOutlined,
+  LogoutOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
@@ -107,6 +108,7 @@ import {
   ProjectProductListPage,
   ProjectsPage,
   RdResearchDocsPage,
+  RdResearchDocPreviewPage,
   RdResearchTodosPage,
   StaffHandoverPage,
   UserManagementPage,
@@ -1129,105 +1131,147 @@ const LayoutWithMenu: React.FC = () => {
           />
         </Tooltip>
       )}
-      menuFooterRender={() => (
-        <div style={{ borderTop: '1px solid rgba(5, 5, 5, 0.06)' }}>
+      menuFooterRender={(menuProps) => {
+        const siderCollapsed = Boolean(menuProps?.collapsed)
+        return (
           <div
             style={{
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              padding: '10px 12px 6px',
-              gap: 4,
+              borderTop: '1px solid rgba(5, 5, 5, 0.06)',
+              overflow: 'hidden',
             }}
           >
-            <Popover
-              title="消息提醒"
-              trigger="click"
-              placement="topLeft"
-              open={reminderOpen}
-              onOpenChange={setReminderOpen}
-              content={reminderPopoverContent}
-            >
-              <Tooltip title="消息提醒">
-                <Badge count={reminderTotal} size="small" overflowCount={99} offset={[-2, 2]}>
-                  <Button type="text" icon={<BellOutlined style={{ fontSize: 18 }} />} style={{ padding: '4px 8px' }} />
-                </Badge>
-              </Tooltip>
-            </Popover>
-            <Popover
-              title="实时动态"
-              trigger="click"
-              placement="topLeft"
-              open={pushOpen}
-              onOpenChange={(open) => {
-                setPushOpen(open)
-                if (open) setPushUnread(0)
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                padding: siderCollapsed ? '10px 6px 6px' : '10px 12px 6px',
+                gap: 4,
               }}
-              content={pushPopoverContent}
             >
-              <Tooltip title="实时动态（钉钉审批与推送）">
-                <Badge count={pushUnread} size="small" overflowCount={99} offset={[-2, 2]}>
-                  <Button
-                    type="text"
-                    icon={
-                      <ThunderboltOutlined
-                        style={{
-                          fontSize: 18,
-                          color: pushLive ? 'var(--ant-colorSuccess)' : 'var(--ant-colorTextSecondary)',
-                        }}
-                      />
-                    }
-                    style={{ padding: '4px 8px' }}
-                  />
-                </Badge>
-              </Tooltip>
-            </Popover>
-          </div>
-          <div
-            style={{
-              padding: '8px 12px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 8,
-              minHeight: 48,
-            }}
-          >
-            <Space size={6} style={{ flex: 1, minWidth: 0 }}>
-              <span style={{ color: 'var(--ant-colorTextSecondary)', fontSize: 12 }}>
-                <UserOutlined style={{ marginRight: 4 }} />
-              </span>
-              <Typography.Text ellipsis style={{ fontSize: 12 }}>
-                {currentUserDisplay}
-              </Typography.Text>
-            </Space>
-            <Space size={4}>
-              {isAdmin ? (
-                <Tooltip title="系统设置">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<SettingOutlined style={{ fontSize: 14 }} />}
-                    onClick={() => setSettingsOpen(true)}
-                    style={{ padding: '2px 6px' }}
-                  />
-                </Tooltip>
-              ) : null}
-              <Button
-                type="text"
-                size="small"
-                onClick={() => {
-                  logout()
-                  navigate('/login', { replace: true })
-                }}
-                style={{ padding: '2px 6px', fontSize: 12 }}
+              <Popover
+                title="消息提醒"
+                trigger="click"
+                placement="topLeft"
+                open={reminderOpen}
+                onOpenChange={setReminderOpen}
+                content={reminderPopoverContent}
               >
-                退出
-              </Button>
-            </Space>
+                <Tooltip title="消息提醒">
+                  <Badge count={reminderTotal} size="small" overflowCount={99} offset={[-2, 2]}>
+                    <Button type="text" icon={<BellOutlined style={{ fontSize: 18 }} />} style={{ padding: '4px 8px' }} />
+                  </Badge>
+                </Tooltip>
+              </Popover>
+              <Popover
+                title="实时动态"
+                trigger="click"
+                placement="topLeft"
+                open={pushOpen}
+                onOpenChange={(open) => {
+                  setPushOpen(open)
+                  if (open) setPushUnread(0)
+                }}
+                content={pushPopoverContent}
+              >
+                <Tooltip title="实时动态（钉钉审批与推送）">
+                  <Badge count={pushUnread} size="small" overflowCount={99} offset={[-2, 2]}>
+                    <Button
+                      type="text"
+                      icon={
+                        <ThunderboltOutlined
+                          style={{
+                            fontSize: 18,
+                            color: pushLive ? 'var(--ant-colorSuccess)' : 'var(--ant-colorTextSecondary)',
+                          }}
+                        />
+                      }
+                      style={{ padding: '4px 8px' }}
+                    />
+                  </Badge>
+                </Tooltip>
+              </Popover>
+            </div>
+            <div
+              style={{
+                padding: siderCollapsed ? '8px 6px' : '8px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: siderCollapsed ? 'center' : 'space-between',
+                gap: 8,
+                minHeight: siderCollapsed ? 40 : 48,
+                flexWrap: siderCollapsed ? 'wrap' : undefined,
+              }}
+            >
+              {siderCollapsed ? (
+                <Space size={4} wrap align="center" style={{ justifyContent: 'center', width: '100%' }}>
+                  <Tooltip title={currentUserDisplay}>
+                    <Button type="text" size="small" icon={<UserOutlined style={{ fontSize: 14 }} />} style={{ padding: '2px 6px' }} />
+                  </Tooltip>
+                  {isAdmin ? (
+                    <Tooltip title="系统设置">
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<SettingOutlined style={{ fontSize: 14 }} />}
+                        onClick={() => setSettingsOpen(true)}
+                        style={{ padding: '2px 6px' }}
+                      />
+                    </Tooltip>
+                  ) : null}
+                  <Tooltip title="退出登录">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<LogoutOutlined style={{ fontSize: 14 }} />}
+                      onClick={() => {
+                        logout()
+                        navigate('/login', { replace: true })
+                      }}
+                      style={{ padding: '2px 6px' }}
+                    />
+                  </Tooltip>
+                </Space>
+              ) : (
+                <>
+                  <Space size={6} style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ color: 'var(--ant-colorTextSecondary)', fontSize: 12 }}>
+                      <UserOutlined style={{ marginRight: 4 }} />
+                    </span>
+                    <Typography.Text ellipsis style={{ fontSize: 12 }}>
+                      {currentUserDisplay}
+                    </Typography.Text>
+                  </Space>
+                  <Space size={4}>
+                    {isAdmin ? (
+                      <Tooltip title="系统设置">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<SettingOutlined style={{ fontSize: 14 }} />}
+                          onClick={() => setSettingsOpen(true)}
+                          style={{ padding: '2px 6px' }}
+                        />
+                      </Tooltip>
+                    ) : null}
+                    <Button
+                      type="text"
+                      size="small"
+                      onClick={() => {
+                        logout()
+                        navigate('/login', { replace: true })
+                      }}
+                      style={{ padding: '2px 6px', fontSize: 12 }}
+                    >
+                      退出
+                    </Button>
+                  </Space>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )
+      }}
     >
       <Modal
         title="系统信息"
@@ -1804,6 +1848,14 @@ const LayoutWithMenu: React.FC = () => {
             element={
               <RequireAuth permissions={['rd-mgmt']}>
                 <RdResearchTodosPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/rd/docs/preview/:docId"
+            element={
+              <RequireAuth permissions={['rd-mgmt']}>
+                <RdResearchDocPreviewPage />
               </RequireAuth>
             }
           />

@@ -1,5 +1,5 @@
 /**
- * 研发富文本 HTML 编辑器（TipTap），用于研发文档等模块；支持粘贴 / 拖入 / 工具栏插入图片。
+ * 研发富文本 HTML 编辑器（TipTap）：标题 Enter/Tab 大纲键、加粗/对齐/链接/图、文字色与高亮、分割线等；支持粘贴 / 拖入 / 工具栏插入图片。
  * 未传 uploadImage 时：压缩后以 data URL 写入；传入 uploadImage 时：走服务端落盘，正文中为图片 URL。
  */
 import {
@@ -8,9 +8,13 @@ import {
   AlignRightOutlined,
   BoldOutlined,
   CodeOutlined,
+  ColumnHeightOutlined,
   CommentOutlined,
+  FontColorsOutlined,
   FontSizeOutlined,
+  HighlightOutlined,
   ItalicOutlined,
+  LineOutlined,
   LinkOutlined,
   OrderedListOutlined,
   PictureOutlined,
@@ -21,17 +25,21 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons'
 import type { Editor } from '@tiptap/core'
+import Highlight from '@tiptap/extension-highlight'
 import Image from '@tiptap/extension-image'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import TextAlign from '@tiptap/extension-text-align'
+import { TextStyleKit } from '@tiptap/extension-text-style'
 import Underline from '@tiptap/extension-underline'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import type { MenuProps } from 'antd'
-import { App, Button, Divider, Dropdown, Space, Tooltip, theme } from 'antd'
+import { App, Button, ColorPicker, Divider, Dropdown, InputNumber, Popover, Select, Space, Tooltip, theme } from 'antd'
 import DOMPurify from 'dompurify'
-import React, { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
+import React, { forwardRef, useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { appendAccessTokenToSinglePreviewUrl } from '../utils/rdRichPreviewAuthUrls'
+import { RdHeadingOutlineKeys } from './RdHeadingOutlineKeys'
 
 /** 单张粘贴图 data URL 长度上限（约对应 ~800KB 原图经压缩后） */
 const MAX_DATA_URL_CHARS = 1_100_000
@@ -51,8 +59,76 @@ function ensureDomPurifyDataImageHook(): void {
   })
 }
 
+/** 允许 TipTap 文字色 / 高亮（span、mark 上的安全 style 与 mark 的 data-color） */
+let domPurifyRdRichStyleHookRegistered = false
+function ensureDomPurifyRdRichStyleHook(): void {
+  if (domPurifyRdRichStyleHookRegistered) return
+  domPurifyRdRichStyleHookRegistered = true
+  DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+    if (data.attrName === 'data-color' && node.nodeName === 'MARK') {
+      const v = String(data.attrValue ?? '').trim()
+      if (v.length > 0 && v.length < 80 && /^[\w#%,().\s+-]+$/.test(v)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(data as any).forceKeepAttr = true
+      }
+      return
+    }
+    if (data.attrName !== 'style') return
+    const tag = node.nodeName
+    if (tag !== 'SPAN' && tag !== 'MARK' && tag !== 'H1' && tag !== 'H2' && tag !== 'H3' && tag !== 'P') return
+    const raw = String(data.attrValue ?? '').trim()
+    if (raw.length === 0 || raw.length > 500) return
+    const parts = raw
+      .split(';')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const safePart = (p: string): boolean => {
+      const m = /^([\w-]+)\s*:\s*(.+)$/i.exec(p)
+      if (!m) return false
+      const key = m[1].toLowerCase()
+      const val = m[2].trim()
+      if (val.length > 120) return false
+      if (key === 'color') {
+        return val === 'inherit' || /^[\w#%,().\s+-]+$/.test(val)
+      }
+      if (key === 'background-color') {
+        return /^[\w#%,().\s+-]+$/.test(val)
+      }
+      if (key === 'font-size') {
+        return /^\d+(\.\d+)?(px|pt|em|rem|%)$/.test(val)
+      }
+      if (key === 'text-align' && (tag === 'H1' || tag === 'H2' || tag === 'H3' || tag === 'P')) {
+        return /^(left|right|center|justify)$/.test(val)
+      }
+      return false
+    }
+    if (parts.length >= 1 && parts.every(safePart)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(data as any).forceKeepAttr = true
+    }
+  })
+}
+
+const FONT_COLOR_PRESETS = [
+  '#000000',
+  '#262626',
+  '#595959',
+  '#8c8c8c',
+  '#f5222d',
+  '#fa8c16',
+  '#fadb14',
+  '#52c41a',
+  '#13c2c2',
+  '#1677ff',
+  '#722ed1',
+  '#eb2f96',
+]
+
+const HIGHLIGHT_PRESETS = ['#fff566', '#d9f7be', '#bae7ff', '#ffccc7', '#ffd8bf', '#e6f4ff', '#f9f0ff', '#fff1b8']
+
 export function sanitizeRdRichPreviewHtml(html: string): string {
   ensureDomPurifyDataImageHook()
+  ensureDomPurifyRdRichStyleHook()
   return DOMPurify.sanitize(html || '', { USE_PROFILES: { html: true } })
 }
 
@@ -116,9 +192,16 @@ async function insertImageFromFile(
   file: File,
   uploadImage: ((f: File) => Promise<string>) | undefined,
   onError: (m: string) => void,
+  decorateUploadedSrc?: (url: string) => string,
 ): Promise<void> {
   try {
-    const src = uploadImage ? await uploadImage(file) : await fileToCompressedDataUrl(file)
+    let src: string
+    if (uploadImage) {
+      const raw = await uploadImage(file)
+      src = decorateUploadedSrc ? decorateUploadedSrc(raw) : raw
+    } else {
+      src = await fileToCompressedDataUrl(file)
+    }
     editor.chain().focus().setImage({ src }).run()
   } catch (e: unknown) {
     onError(e instanceof Error ? e.message : '插入图片失败')
@@ -130,18 +213,19 @@ function tryConsumeImageDataTransfer(
   dt: DataTransfer | null,
   uploadImage: ((f: File) => Promise<string>) | undefined,
   onError: (m: string) => void,
+  decorateUploadedSrc?: (url: string) => string,
 ): boolean {
   if (!dt) return false
   const files = Array.from(dt.files || []).filter((f) => f.type.startsWith('image/'))
   if (files.length > 0) {
-    void insertImageFromFile(editor, files[0], uploadImage, onError)
+    void insertImageFromFile(editor, files[0], uploadImage, onError, decorateUploadedSrc)
     return true
   }
   for (const item of Array.from(dt.items || [])) {
     if (item.kind === 'file' && item.type.startsWith('image/')) {
       const f = item.getAsFile()
       if (f) {
-        void insertImageFromFile(editor, f, uploadImage, onError)
+        void insertImageFromFile(editor, f, uploadImage, onError, decorateUploadedSrc)
         return true
       }
     }
@@ -153,6 +237,16 @@ function buildTiptapExtensions(placeholder: string) {
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
+    }),
+    RdHeadingOutlineKeys,
+    TextStyleKit.configure({
+      fontFamily: false,
+      fontSize: {},
+      lineHeight: false,
+    }),
+    Highlight.configure({
+      multicolor: true,
+      HTMLAttributes: { class: 'rd-tiptap-highlight' },
     }),
     Underline,
     Link.configure({
@@ -211,34 +305,92 @@ function RdTiptapMenuBar({
   onInsertImagePick: () => void
 }) {
   const { token } = theme.useToken()
+  const { message: msg } = App.useApp()
+  const [fontSizeOpen, setFontSizeOpen] = useState(false)
+  const [customSizeNum, setCustomSizeNum] = useState<number | null>(16)
+  const [customSizeUnit, setCustomSizeUnit] = useState<'px' | 'pt'>('px')
+
+  const headingMenu: MenuProps['items'] = useMemo(() => {
+    if (!editor) return []
+    return [
+      {
+        key: 'p',
+        label: '正文',
+        onClick: () => editor.chain().focus().setParagraph().run(),
+      },
+      { type: 'divider' },
+      {
+        key: 'h1',
+        label: '标题 1',
+        onClick: () => editor.chain().focus().toggleHeading({ level: 1 }).run(),
+      },
+      {
+        key: 'h2',
+        label: '标题 2',
+        onClick: () => editor.chain().focus().toggleHeading({ level: 2 }).run(),
+      },
+      {
+        key: 'h3',
+        label: '标题 3',
+        onClick: () => editor.chain().focus().toggleHeading({ level: 3 }).run(),
+      },
+    ]
+  }, [editor])
+
+  const FONT_SIZE_PRESETS = ['12px', '13px', '14px', '15px', '16px', '18px', '20px', '22px', '24px', '28px', '32px', '36px', '40px'] as const
+  const fontSizeMenu: MenuProps['items'] = useMemo(() => {
+    if (!editor) return []
+    return [
+      {
+        key: 'fs-clear',
+        label: '默认字号',
+        onClick: () => {
+          editor.chain().focus().unsetFontSize().run()
+          setFontSizeOpen(false)
+        },
+      },
+      { type: 'divider' },
+      ...FONT_SIZE_PRESETS.map((sz) => ({
+        key: `fs-${sz}`,
+        label: sz,
+        onClick: () => {
+          editor.chain().focus().setFontSize(sz).run()
+          setFontSizeOpen(false)
+        },
+      })),
+    ]
+  }, [editor])
+
+  const applyCustomFontSize = () => {
+    if (!editor) return
+    if (customSizeNum == null || !Number.isFinite(customSizeNum) || customSizeNum <= 0) {
+      msg.warning('请输入有效字号')
+      return
+    }
+    const rounded = Math.round(customSizeNum * 100) / 100
+    const clamped = Math.min(192, Math.max(8, rounded))
+    editor.chain().focus().setFontSize(`${clamped}${customSizeUnit}`).run()
+    setFontSizeOpen(false)
+  }
 
   if (!editor) return null
 
-  const headingMenu: MenuProps['items'] = [
-    {
-      key: 'p',
-      label: '正文',
-      onClick: () => editor.chain().focus().setParagraph().run(),
-    },
-    { type: 'divider' },
-    {
-      key: 'h1',
-      label: '标题 1',
-      onClick: () => editor.chain().focus().toggleHeading({ level: 1 }).run(),
-    },
-    {
-      key: 'h2',
-      label: '标题 2',
-      onClick: () => editor.chain().focus().toggleHeading({ level: 2 }).run(),
-    },
-    {
-      key: 'h3',
-      label: '标题 3',
-      onClick: () => editor.chain().focus().toggleHeading({ level: 3 }).run(),
-    },
-  ]
-
   const linkActive = editor.isActive('link')
+  const currentFontSize = editor.getAttributes('textStyle').fontSize as string | undefined
+
+  const syncCustomFromSelection = () => {
+    const fs = editor.getAttributes('textStyle').fontSize as string | undefined
+    if (fs) {
+      const m = /^(\d+(?:\.\d+)?)(px|pt)$/i.exec(String(fs).trim())
+      if (m) {
+        setCustomSizeNum(Number(m[1]))
+        setCustomSizeUnit(m[2].toLowerCase() as 'px' | 'pt')
+        return
+      }
+    }
+    setCustomSizeNum(16)
+    setCustomSizeUnit('px')
+  }
 
   return (
     <div className="rd-tiptap-menubar">
@@ -260,10 +412,149 @@ function RdTiptapMenuBar({
             />
           </Tooltip>
         </Dropdown>
+        <Dropdown
+          open={fontSizeOpen}
+          onOpenChange={(open) => {
+            setFontSizeOpen(open)
+            if (open) syncCustomFromSelection()
+          }}
+          trigger={['click']}
+          menu={{ items: fontSizeMenu }}
+          dropdownRender={(menu) => (
+            <div className="rd-tiptap-fontsize-dropdown">
+              {menu}
+              <Divider style={{ margin: '8px 0' }} />
+              <div
+                className="rd-tiptap-fontsize-custom"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 6 }}>自定义</div>
+                <Space.Compact style={{ width: '100%' }}>
+                  <InputNumber
+                    size="small"
+                    min={8}
+                    max={192}
+                    step={0.5}
+                    value={customSizeNum}
+                    onChange={(v) => setCustomSizeNum(typeof v === 'number' ? v : null)}
+                    style={{ width: '100%', minWidth: 0, flex: 1 }}
+                    placeholder="数值"
+                  />
+                  <Select
+                    size="small"
+                    value={customSizeUnit}
+                    onChange={(v) => setCustomSizeUnit(v as 'px' | 'pt')}
+                    options={[
+                      { value: 'px', label: 'px' },
+                      { value: 'pt', label: 'pt' },
+                    ]}
+                    style={{ width: 64 }}
+                  />
+                  <Button size="small" type="primary" onClick={applyCustomFontSize}>
+                    应用
+                  </Button>
+                </Space.Compact>
+              </div>
+            </div>
+          )}
+        >
+          <Tooltip title="字号">
+            <Button
+              type="text"
+              size="small"
+              className="rd-tiptap-toolbar-btn rd-tiptap-toolbar-btn-wide rd-tiptap-fontsize-trigger"
+              style={{
+                color: currentFontSize ? token.colorPrimary : token.colorText,
+                background: currentFontSize ? token.colorPrimaryBg : undefined,
+              }}
+            >
+              <ColumnHeightOutlined />
+              <span className="rd-tiptap-fontsize-trigger__label">{currentFontSize ?? '字号'}</span>
+            </Button>
+          </Tooltip>
+        </Dropdown>
         <TbIconBtn title="粗体" active={editor.isActive('bold')} icon={<BoldOutlined />} onClick={() => editor.chain().focus().toggleBold().run()} />
         <TbIconBtn title="斜体" active={editor.isActive('italic')} icon={<ItalicOutlined />} onClick={() => editor.chain().focus().toggleItalic().run()} />
         <TbIconBtn title="下划线" active={editor.isActive('underline')} icon={<UnderlineOutlined />} onClick={() => editor.chain().focus().toggleUnderline().run()} />
         <TbIconBtn title="删除线" active={editor.isActive('strike')} icon={<StrikethroughOutlined />} onClick={() => editor.chain().focus().toggleStrike().run()} />
+        <Divider type="vertical" className="rd-tiptap-toolbar-divider" />
+        <Popover
+          trigger="click"
+          placement="bottomLeft"
+          title="文字颜色"
+          content={
+            <Space direction="vertical" size="small" style={{ minWidth: 240 }}>
+              <ColorPicker
+                showText
+                format="hex"
+                defaultValue="#1677ff"
+                presets={[{ label: '常用', colors: FONT_COLOR_PRESETS }]}
+                onChangeComplete={(c) => {
+                  editor.chain().focus().setColor(c.toHexString()).run()
+                }}
+              />
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => editor.chain().focus().unsetColor().run()}>
+                清除文字颜色
+              </Button>
+            </Space>
+          }
+        >
+          <Tooltip title="文字颜色">
+            <Button
+              type="text"
+              size="small"
+              className="rd-tiptap-toolbar-btn rd-tiptap-toolbar-btn-wide"
+              icon={<FontColorsOutlined />}
+              aria-label="文字颜色"
+              style={{
+                color: (() => {
+                  const c = editor.getAttributes('textStyle').color as string | undefined
+                  return c && String(c).trim() ? c : token.colorText
+                })(),
+                background: editor.getAttributes('textStyle').color ? token.colorPrimaryBg : undefined,
+              }}
+            />
+          </Tooltip>
+        </Popover>
+        <Popover
+          trigger="click"
+          placement="bottomLeft"
+          title="高亮背景"
+          content={
+            <Space direction="vertical" size="small">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: 220 }}>
+                {HIGHLIGHT_PRESETS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className="rd-tiptap-hl-swatch"
+                    title={c}
+                    style={{ backgroundColor: c }}
+                    onClick={() => editor.chain().focus().setHighlight({ color: c }).run()}
+                  />
+                ))}
+              </div>
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => editor.chain().focus().unsetHighlight().run()}>
+                清除高亮
+              </Button>
+            </Space>
+          }
+        >
+          <Tooltip title="高亮背景">
+            <Button
+              type="text"
+              size="small"
+              className="rd-tiptap-toolbar-btn rd-tiptap-toolbar-btn-wide"
+              icon={<HighlightOutlined />}
+              aria-label="高亮背景"
+              style={{
+                color: editor.isActive('highlight') ? token.colorPrimary : token.colorText,
+                background: editor.isActive('highlight') ? token.colorPrimaryBg : undefined,
+              }}
+            />
+          </Tooltip>
+        </Popover>
         <Divider type="vertical" className="rd-tiptap-toolbar-divider" />
         <TbIconBtn
           title="无序列表"
@@ -298,6 +589,7 @@ function RdTiptapMenuBar({
           icon={<AlignRightOutlined />}
           onClick={() => editor.chain().focus().setTextAlign('right').run()}
         />
+        <TbIconBtn title="分割线" icon={<LineOutlined />} onClick={() => editor.chain().focus().setHorizontalRule().run()} />
         <Divider type="vertical" className="rd-tiptap-toolbar-divider" />
         <TbIconBtn
           title="链接"
@@ -329,23 +621,35 @@ export type RdRichHtmlEditorProps = {
   placeholder?: string
   /** 若提供，则插入/粘贴/拖入图片时上传并返回正文中使用的 src（通常为同源相对路径） */
   uploadImage?: (file: File) => Promise<string>
+  /** 与 uploadImage 配合：预览类 URL 需在 query 中带 access_token，否则浏览器 img 请求无 Authorization */
+  previewAccessToken?: string
+}
+
+export type RdRichHtmlEditorRef = {
+  /** 保存前调用，获取 TipTap 当前 HTML（避免仅依赖 React state 滞后） */
+  getHtml: () => string
 }
 
 /** mountKey 变化时由 useEditor 依赖重建实例 */
-export function RdRichHtmlEditor({
-  html,
-  onChange,
-  mountKey,
-  placeholder = '请输入正文，可直接粘贴截图或图片…',
-  uploadImage,
-}: RdRichHtmlEditorProps) {
+export const RdRichHtmlEditor = forwardRef<RdRichHtmlEditorRef, RdRichHtmlEditorProps>(function RdRichHtmlEditor(
+  { html, onChange, mountKey, placeholder = '请输入正文，可直接粘贴截图或图片…', uploadImage, previewAccessToken },
+  ref,
+) {
   const { message: msg } = App.useApp()
   const editorRef = useRef<Editor | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const uploadImageRef = useRef(uploadImage)
+  const previewAccessTokenRef = useRef(previewAccessToken)
   useLayoutEffect(() => {
     uploadImageRef.current = uploadImage
   }, [uploadImage])
+  useLayoutEffect(() => {
+    previewAccessTokenRef.current = previewAccessToken
+  }, [previewAccessToken])
+
+  const decorateUploadedPreviewSrc = useCallback((url: string) => {
+    return appendAccessTokenToSinglePreviewUrl(url, previewAccessTokenRef.current)
+  }, [])
 
   const extensions = useMemo(() => buildTiptapExtensions(placeholder), [placeholder])
 
@@ -365,7 +669,9 @@ export function RdRichHtmlEditor({
         handlePaste: (_view, event) => {
           const ed = editorRef.current
           if (!ed) return false
-          if (tryConsumeImageDataTransfer(ed, event.clipboardData, uploadImageRef.current, (m) => msg.error(m))) {
+          if (
+            tryConsumeImageDataTransfer(ed, event.clipboardData, uploadImageRef.current, (m) => msg.error(m), decorateUploadedPreviewSrc)
+          ) {
             event.preventDefault()
             return true
           }
@@ -374,7 +680,9 @@ export function RdRichHtmlEditor({
         handleDrop: (_view, event) => {
           const ed = editorRef.current
           if (!ed) return false
-          if (tryConsumeImageDataTransfer(ed, event.dataTransfer, uploadImageRef.current, (m) => msg.error(m))) {
+          if (
+            tryConsumeImageDataTransfer(ed, event.dataTransfer, uploadImageRef.current, (m) => msg.error(m), decorateUploadedPreviewSrc)
+          ) {
             event.preventDefault()
             return true
           }
@@ -389,6 +697,18 @@ export function RdRichHtmlEditor({
     editorRef.current = editor
   }, [editor])
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      getHtml: () => {
+        const ed = editorRef.current
+        if (ed && !ed.isDestroyed) return ed.getHTML()
+        return html
+      },
+    }),
+    [html],
+  )
+
   const onPickFile = useCallback(() => {
     fileInputRef.current?.click()
   }, [])
@@ -399,9 +719,9 @@ export function RdRichHtmlEditor({
       const f = e.target.files?.[0]
       e.target.value = ''
       if (!ed || !f) return
-      void insertImageFromFile(ed, f, uploadImageRef.current, (m) => msg.error(m))
+      void insertImageFromFile(ed, f, uploadImageRef.current, (m) => msg.error(m), decorateUploadedPreviewSrc)
     },
-    [msg],
+    [msg, decorateUploadedPreviewSrc],
   )
 
   return (
@@ -411,4 +731,4 @@ export function RdRichHtmlEditor({
       {editor ? <EditorContent editor={editor} /> : <div className="rd-tiptap-prosemirror">加载编辑器…</div>}
     </div>
   )
-}
+})

@@ -1,5 +1,5 @@
 /**
- * 研发管理 — 研发待办：卡片网格、主附件与跟踪记录（附图）、闭环状态与系统跟踪；上传前浏览器压缩图片。
+ * 研发管理 — 研发待办：紧凑列表行、主附件与跟踪记录（附图）、闭环状态与系统跟踪；上传前浏览器压缩图片。
  */
 import {
   CheckCircleOutlined,
@@ -19,7 +19,6 @@ import {
   App,
   Button,
   Card,
-  Col,
   DatePicker,
   Descriptions,
   Divider,
@@ -31,7 +30,6 @@ import {
   Modal,
   Pagination,
   Popconfirm,
-  Row,
   Segmented,
   Select,
   Space,
@@ -55,7 +53,7 @@ import {
 } from '../utils/constructionAssigneeOptions'
 import { compressImageFilesForUpload, compressImageForUpload } from '../utils/compressImageForUpload'
 
-const { Title, Text, Paragraph } = Typography
+const { Title, Text } = Typography
 
 export type RdResearchTodoRow = {
   id: number
@@ -112,7 +110,9 @@ type StatusFilter = 'all' | 'open' | 'done'
 function parseAssigneeList(raw: unknown): string[] {
   try {
     const p = JSON.parse(String(raw ?? '[]')) as unknown
-    return Array.isArray(p) ? p.filter((x): x is string => typeof x === 'string' && x.trim()).map((x) => x.trim()) : []
+    return Array.isArray(p)
+      ? p.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim())
+      : []
   } catch {
     return []
   }
@@ -768,7 +768,7 @@ const RdResearchTodosPage: React.FC = () => {
     )
   }
 
-  const renderTodoCard = (row: RdResearchTodoRow) => {
+  const renderTodoListRow = (row: RdResearchTodoRow) => {
     const done = row.status === 'done'
     const titleText = (row.title && String(row.title).trim()) || '—'
     const contentRaw = row.content && String(row.content).trim() ? String(row.content).trim() : ''
@@ -778,124 +778,110 @@ const RdResearchTodosPage: React.FC = () => {
     const nAtt = Number(row.attachment_count ?? 0)
     const nTrack = Number(row.track_entry_count ?? 0)
     const hasAtt = Number.isFinite(nAtt) && nAtt > 0
+    const assigneeLine =
+      us.length === 0
+        ? '未指定负责人'
+        : us.map((u) => assigneeLabelByUser.get(u) ?? labelForAssigneeUsername(u, null)).join('、')
 
     return (
-      <Col xs={24} sm={12} lg={8} xl={6} key={row.id}>
-        <Card
-          hoverable
-          className={`rd-todo-card rd-todo-card--${done ? 'done' : 'open'} rd-todo-card--clickable`}
-          styles={{ body: { padding: 14, cursor: 'pointer', position: 'relative', overflow: 'hidden' } }}
-          onClick={() => openView(row)}
-        >
-          <div className="rd-todo-card__wrap">
-            <div className="rd-todo-card__watermark" aria-hidden>
-              {done ? <CheckCircleOutlined /> : <ExperimentOutlined />}
-            </div>
-            <div className="rd-todo-card__fg">
-          <div
-            role="presentation"
-            onClick={(e) => e.stopPropagation()}
-            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}
-          >
-            <div>{statusTag(row)}</div>
-            <Space size={4} className="rd-todo-actions" wrap>
-              <Tooltip title="查看详情">
-                <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => openView(row)} />
-              </Tooltip>
-              <Tooltip title="编辑待办">
-                <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
-              </Tooltip>
-              <Popconfirm title="确定删除该待办？" okText="删除" cancelText="取消" onConfirm={() => void handleDelete(row.id)}>
-                <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="删除" />
-              </Popconfirm>
-            </Space>
+      <div
+        key={row.id}
+        className={`rd-todo-row rd-todo-row--${done ? 'done' : 'open'}`}
+        role="button"
+        tabIndex={0}
+        onClick={() => openView(row)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            openView(row)
+          }
+        }}
+      >
+        <div className="rd-todo-row__accent" aria-hidden />
+        <div className="rd-todo-row__main">
+          <div className="rd-todo-row__line1">
+            {statusTag(row)}
+            <Text strong className="rd-todo-row__title" ellipsis={{ tooltip: titleText }}>
+              {titleText}
+            </Text>
           </div>
-          <Typography.Title level={5} style={{ marginTop: 0, marginBottom: 8, fontSize: 16 }} ellipsis={{ tooltip: titleText }}>
-            {titleText}
-          </Typography.Title>
+          <div className="rd-todo-row__meta">
+            <span>{assigneeLine}</span>
+            <span className="rd-todo-row__meta-sep" aria-hidden>
+              ·
+            </span>
+            <span>{row.due_at && String(row.due_at).trim() ? `截止 ${formatDateTime(row.due_at)}` : '无截止时间'}</span>
+            {hasAtt ? (
+              <>
+                <span className="rd-todo-row__meta-sep" aria-hidden>
+                  ·
+                </span>
+                <Tag icon={<PaperClipOutlined />} color="cyan" className="rd-todo-row__inline-tag">
+                  主图 {nAtt}
+                </Tag>
+              </>
+            ) : null}
+            {nTrack > 0 ? (
+              <>
+                <span className="rd-todo-row__meta-sep" aria-hidden>
+                  ·
+                </span>
+                <Tag icon={<HistoryOutlined />} color="geekblue" className="rd-todo-row__inline-tag">
+                  跟踪 {nTrack}
+                </Tag>
+              </>
+            ) : null}
+            <span className="rd-todo-row__meta-sep" aria-hidden>
+              ·
+            </span>
+            <span>
+              {done
+                ? `完成 ${row.completed_by || '—'} · ${formatDateTime(row.completed_at)}`
+                : `更新 ${row.updated_by || '—'} · ${formatDateTime(row.updated_at)}`}
+            </span>
+          </div>
           {contentRaw ? (
-            <Paragraph type="secondary" ellipsis={{ rows: 3, tooltip: true }} style={{ marginBottom: 10, fontSize: 13 }}>
+            <Text type="secondary" className="rd-todo-row__excerpt" ellipsis={{ tooltip: true }}>
               {contentRaw}
-            </Paragraph>
+            </Text>
           ) : (
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
+            <Text type="secondary" className="rd-todo-row__excerpt rd-todo-row__excerpt--muted">
               无具体内容
             </Text>
           )}
-          <div style={{ marginBottom: 8 }}>
-            {us.length === 0 ? (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                未指定负责人
-              </Text>
-            ) : (
-              <Space size={[4, 4]} wrap>
-                {us.map((u) => (
-                  <Tag key={u} color="blue" style={{ marginInlineEnd: 0 }}>
-                    {assigneeLabelByUser.get(u) ?? labelForAssigneeUsername(u, null)}
-                  </Tag>
-                ))}
-              </Space>
-            )}
-          </div>
-          <Space size={[6, 6]} wrap style={{ width: '100%' }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {row.due_at && String(row.due_at).trim() ? `截止 ${formatDateTime(row.due_at)}` : '无截止时间'}
-            </Text>
-            {hasAtt ? (
-              <Tag icon={<PaperClipOutlined />} color="cyan" style={{ marginInlineEnd: 0 }}>
-                主图 {nAtt}
-              </Tag>
-            ) : null}
-            {nTrack > 0 ? (
-              <Tag icon={<HistoryOutlined />} color="geekblue" style={{ marginInlineEnd: 0 }}>
-                跟踪 {nTrack}
-              </Tag>
-            ) : null}
-          </Space>
           {notesPlain ? (
-            <Paragraph type="secondary" ellipsis={{ rows: 2, tooltip: true }} style={{ marginTop: 10, marginBottom: 0, fontSize: 12 }}>
+            <Text type="secondary" className="rd-todo-row__excerpt" ellipsis={{ tooltip: true }}>
               备注：{notesPlain}
-            </Paragraph>
+            </Text>
           ) : null}
-          <div role="presentation" className="rd-todo-card__cta" onClick={(e) => e.stopPropagation()}>
-            <Space wrap size="small" style={{ width: '100%' }}>
-              <Button
-                type={done ? 'default' : 'primary'}
-                size="small"
-                icon={done ? <RollbackOutlined /> : <CheckCircleOutlined />}
-                onClick={() => void setRowStatus(row, done ? 'open' : 'done')}
-              >
-                {done ? '重新打开' : '标记完成'}
-              </Button>
-              <Button
-                color="primary"
-                variant="outlined"
-                size="small"
-                icon={<HistoryOutlined />}
-                onClick={() => openTrackDrawer(row)}
-              >
-                写跟踪记录{nTrack > 0 ? `（${nTrack}）` : ''}
-              </Button>
-            </Space>
-            <Text type="secondary" className="rd-todo-card__cta-hint">
-              {done
-                ? '需要补充说明可写跟踪；若要继续处理请点击「重新打开」。'
-                : '进展、截图请写在跟踪里；处理结束后点「标记完成」结案。'}
-            </Text>
-          </div>
-          {done ? (
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-              完成：{row.completed_by || '—'} · {formatDateTime(row.completed_at)}
-            </Text>
-          ) : (
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-              更新：{row.updated_by || '—'} · {formatDateTime(row.updated_at)}
-            </Text>
-          )}
-            </div>
-          </div>
-        </Card>
-      </Col>
+        </div>
+        <div className="rd-todo-row__actions" role="presentation" onClick={(e) => e.stopPropagation()}>
+          <Space size={0} wrap className="rd-todo-row__action-icons">
+            <Tooltip title="查看详情">
+              <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => openView(row)} />
+            </Tooltip>
+            <Tooltip title="编辑待办">
+              <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+            </Tooltip>
+            <Popconfirm title="确定删除该待办？" okText="删除" cancelText="取消" onConfirm={() => void handleDelete(row.id)}>
+              <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="删除" />
+            </Popconfirm>
+          </Space>
+          <Space size={4} wrap className="rd-todo-row__action-btns">
+            <Button
+              type={done ? 'default' : 'primary'}
+              size="small"
+              icon={done ? <RollbackOutlined /> : <CheckCircleOutlined />}
+              onClick={() => void setRowStatus(row, done ? 'open' : 'done')}
+            >
+              {done ? '重新打开' : '完成'}
+            </Button>
+            <Button color="primary" variant="link" size="small" icon={<HistoryOutlined />} onClick={() => openTrackDrawer(row)}>
+              跟踪{nTrack > 0 ? `(${nTrack})` : ''}
+            </Button>
+          </Space>
+        </div>
+      </div>
     )
   }
 
@@ -935,7 +921,7 @@ const RdResearchTodosPage: React.FC = () => {
               研发待办
             </Title>
             <Text type="secondary" className="header-desc" style={{ display: 'block' }}>
-              卡片视图区分进行中 / 已完成；支持主附件与跟踪记录（可附图）；标记完成形成闭环并记入跟踪。
+              紧凑列表区分进行中 / 已完成；点击行查看详情；支持主附件与跟踪（可附图）；右侧可快速完成或写跟踪。
             </Text>
           </div>
         </div>
@@ -946,7 +932,7 @@ const RdResearchTodosPage: React.FC = () => {
         title={
           <span>
             <ClockCircleOutlined style={{ marginRight: 8, color: 'var(--ant-colorPrimary)' }} />
-            待办卡片
+            待办列表
             {total > 0 ? (
               <Text type="secondary" style={{ marginLeft: 8, fontWeight: 400, fontSize: 13 }}>
                 共 {total} 条
@@ -992,7 +978,7 @@ const RdResearchTodosPage: React.FC = () => {
           {list.length === 0 && !loading ? (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无待办" />
           ) : (
-            <Row gutter={[16, 16]}>{list.map((row) => renderTodoCard(row))}</Row>
+            <div className="rd-todo-list rd-todo-list--bordered">{list.map((row) => renderTodoListRow(row))}</div>
           )}
         </Spin>
         {total > 0 ? (
