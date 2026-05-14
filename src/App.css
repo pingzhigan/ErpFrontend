@@ -707,7 +707,113 @@
   max-height: none;
 }
 
-/* 研发待办 TipTap 编辑区 */
+/* 研发文档 · 正文编辑：富文本 UI（不改结构，仅强化工具栏与稿纸区） */
+.rd-doc-rich-split__panel--editor.rd-doc-rich-split__panel,
+.rd-doc-rich-editor-only__panel.rd-doc-rich-split__panel {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ant-colorBorderSecondary, #f0f0f0) 92%, #94a3b8 8%),
+    0 10px 40px -18px rgba(15, 23, 42, 0.12);
+  border-color: color-mix(in srgb, var(--ant-colorBorderSecondary, #f0f0f0) 88%, #cbd5e1 12%);
+  isolation: isolate;
+}
+.rd-doc-rich-split__panel--editor .rd-doc-rich-split__panel-head,
+.rd-doc-rich-editor-only .rd-doc-rich-split__panel-head {
+  padding: 12px 14px 10px;
+  gap: 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ant-colorBorderSecondary, #f0f0f0) 75%, #e2e8f0);
+  background: linear-gradient(180deg, #fafcff 0%, #f4f6f9 55%, #f0f2f5 100%);
+}
+.rd-doc-rich-split__panel--editor .rd-doc-rich-split__panel-sub,
+.rd-doc-rich-editor-only .rd-doc-rich-split__panel-sub {
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  opacity: 0.92;
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-shell,
+.rd-doc-rich-editor-only .rd-tiptap-shell {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-menubar,
+.rd-doc-rich-editor-only .rd-tiptap-menubar {
+  flex-wrap: wrap;
+  gap: 5px 6px;
+  padding: 9px 10px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ant-colorBorderSecondary, #f0f0f0) 70%, #cbd5e1);
+  background: linear-gradient(180deg, #fcfcfd 0%, #f1f3f7 48%, #e8ebf0 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 4px 14px -10px rgba(15, 23, 42, 0.18);
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-toolbar-btn.ant-btn,
+.rd-doc-rich-editor-only .rd-tiptap-toolbar-btn.ant-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  color: var(--ant-colorText, rgba(0, 0, 0, 0.78));
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease;
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-toolbar-btn.ant-btn:hover,
+.rd-doc-rich-editor-only .rd-tiptap-toolbar-btn.ant-btn:hover {
+  background: #fff !important;
+  border-color: color-mix(in srgb, var(--ant-colorBorderSecondary, #f0f0f0) 60%, #cbd5e1) !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-toolbar-btn.ant-btn:active,
+.rd-doc-rich-editor-only .rd-tiptap-toolbar-btn.ant-btn:active {
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-toolbar-btn-wide.ant-btn,
+.rd-doc-rich-editor-only .rd-tiptap-toolbar-btn-wide.ant-btn {
+  min-width: 36px;
+  padding-inline: 8px;
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-toolbar-divider.ant-divider-vertical,
+.rd-doc-rich-editor-only .rd-tiptap-toolbar-divider.ant-divider-vertical {
+  margin: 0 5px;
+  height: 24px;
+  border-inline-start-color: color-mix(in srgb, var(--ant-colorBorderSecondary, #f0f0f0) 50%, transparent);
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-prosemirror,
+.rd-doc-rich-editor-only .rd-tiptap-prosemirror {
+  min-height: 360px;
+  max-height: none;
+  padding: 22px 26px 32px;
+  font-size: 15px;
+  line-height: 1.78;
+  color: var(--ant-colorText, rgba(0, 0, 0, 0.88));
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+  background: linear-gradient(180deg, #fffefb 0%, #fdfdfd 22%, #f8f9fb 100%);
+  border-top: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-prosemirror:focus,
+.rd-doc-rich-editor-only .rd-tiptap-prosemirror:focus {
+  outline: none;
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-prosemirror p,
+.rd-doc-rich-editor-only .rd-tiptap-prosemirror p {
+  margin: 0.4em 0;
+}
+.rd-doc-rich-split__panel--editor .rd-tiptap-prosemirror blockquote,
+.rd-doc-rich-editor-only .rd-tiptap-prosemirror blockquote {
+  border-left-width: 4px;
+  border-left-color: color-mix(in srgb, var(--ant-colorPrimary, #1677ff) 45%, #cbd5e1);
+  background: color-mix(in srgb, var(--ant-colorPrimaryBg, #e6f4ff) 35%, transparent);
+  border-radius: 0 8px 8px 0;
+  padding: 0.5em 0.85em 0.5em 1rem;
+}
+
+/* TipTap 通用壳（研发文档正文等复用；文档编辑区由上方 scoped 规则覆盖） */
 .rd-tiptap-shell {
   position: relative;
   border: 1px solid #d9d9d9;
@@ -969,29 +1075,96 @@
   padding-inline: 6px;
 }
 
-/* 研发待办：紧凑列表（统一外框 + 行间分隔） */
+/* 研发待办：表格式列表（表头 + 多列单行，横向滚动） */
+.rd-todo-page .section-card .ant-card-body {
+  min-width: 0;
+}
+.rd-todo-page .ant-spin-nested-loading {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+.rd-todo-page .ant-spin-nested-loading > .ant-spin-container {
+  width: 100%;
+  min-width: 0;
+}
+.rd-todo-list-shell {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+}
 .rd-todo-list.rd-todo-list--bordered {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
   border-radius: 8px;
-  overflow: hidden;
+  /* 勿用 overflow:hidden，否则与宽表组合时父级无法产生横向滚动条 */
+  overflow-x: visible;
+  overflow-y: visible;
   background: var(--ant-colorBgContainer, #fff);
+  /* 宽屏铺满容器；窄于 1020px 时至少 1020 由外壳出现横向滚动条（勿用 max-content，易大于 100% 导致全屏也出横条） */
+  width: 100%;
+  min-width: 1020px;
+  box-sizing: border-box;
 }
-.rd-todo-row {
-  display: flex;
-  align-items: stretch;
-  flex-wrap: wrap;
+.rd-todo-list-cols {
+  display: grid;
+  grid-template-columns:
+    3px
+    minmax(96px, 1fr)
+    minmax(120px, 2fr)
+    76px
+    minmax(80px, 112px)
+    110px
+    minmax(108px, 1.1fr)
+    44px
+    minmax(72px, 1fr)
+    minmax(168px, 208px);
+  column-gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+.rd-todo-list-head {
+  flex-shrink: 0;
+  background: var(--ant-colorFillAlter, #fafafa);
+  border-bottom: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ant-colorTextSecondary, rgba(0, 0, 0, 0.65));
+}
+.rd-todo-list-head__accent {
+  width: 3px;
+  align-self: stretch;
+  background: transparent;
+}
+.rd-todo-list-head__col {
+  min-width: 0;
+}
+.rd-todo-list-head__col--narrow {
+  text-align: center;
+}
+.rd-todo-list-head__col--actions {
+  text-align: right;
+}
+.rd-todo-row.rd-todo-list-cols {
   text-align: left;
   border-bottom: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
   cursor: pointer;
   transition: background-color 0.15s ease;
   outline: none;
+  min-height: 44px;
 }
-.rd-todo-row:last-child {
+.rd-todo-list .rd-todo-row:last-child {
   border-bottom: none;
 }
-.rd-todo-row:hover {
+.rd-todo-list .rd-todo-row:hover {
   background: rgba(22, 119, 255, 0.05);
 }
 .rd-todo-row:focus-visible {
@@ -1001,51 +1174,60 @@
 .rd-todo-row--done {
   background: var(--ant-colorFillAlter, #fafafa);
 }
-.rd-todo-row--done:hover {
+.rd-todo-list .rd-todo-row--done:hover {
   background: rgba(0, 0, 0, 0.04);
 }
 .rd-todo-row__accent {
-  width: 3px;
-  flex-shrink: 0;
+  width: 100%;
+  align-self: stretch;
+  min-height: 100%;
   background: var(--ant-colorPrimary, #1677ff);
 }
 .rd-todo-row--done .rd-todo-row__accent {
   background: var(--ant-colorSuccess, #52c41a);
 }
-.rd-todo-row__main {
-  flex: 1 1 220px;
+.rd-todo-row__col {
   min-width: 0;
-  padding: 10px 12px 10px 10px;
-}
-.rd-todo-row__line1 {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-width: 0;
+}
+.rd-todo-row__col--content,
+.rd-todo-row__col--notes {
+  align-items: flex-start;
+  padding-block: 2px;
+}
+.rd-todo-row__col--status,
+.rd-todo-row__col--attach {
+  justify-content: center;
+}
+.rd-todo-row__col--actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 6px;
+  border-left: 1px dashed var(--ant-colorBorderSecondary, #f0f0f0);
+  padding-left: 10px;
+  margin-left: 0;
 }
 .rd-todo-row__title.ant-typography {
   display: block;
-  flex: 1 1 120px;
+  width: 100%;
   min-width: 0;
   margin-bottom: 0 !important;
   font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.rd-todo-row__cell-text.ant-typography {
+  margin-bottom: 0 !important;
+  font-size: 12px !important;
   line-height: 1.45;
+  width: 100%;
 }
-.rd-todo-row__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 2px;
-  margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--ant-colorTextSecondary, rgba(0, 0, 0, 0.65));
-}
-.rd-todo-row__meta-sep {
-  margin: 0 4px;
-  color: var(--ant-colorTextQuaternary, rgba(0, 0, 0, 0.25));
-  user-select: none;
+.rd-todo-row__cell-text--muted {
+  opacity: 0.55;
 }
 .rd-todo-row__inline-tag.ant-tag {
   margin-inline: 0;
@@ -1053,42 +1235,112 @@
   line-height: 18px;
   padding-inline: 6px;
 }
-.rd-todo-row__excerpt {
+.rd-todo-row__excerpt.ant-typography {
   display: block;
-  margin-top: 4px;
+  margin-bottom: 0 !important;
   font-size: 12px;
   line-height: 1.45;
+  width: 100%;
 }
 .rd-todo-row__excerpt--muted {
   font-style: italic;
   opacity: 0.85;
 }
-.rd-todo-row__actions {
-  flex: 1 1 auto;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px 8px;
-  padding: 8px 10px;
-  border-top: 1px dashed var(--ant-colorBorderSecondary, #f0f0f0);
-  box-sizing: border-box;
-}
 .rd-todo-row__action-icons .ant-btn {
   padding-inline: 6px;
 }
-@media (min-width: 768px) {
-  .rd-todo-row {
-    flex-wrap: nowrap;
+
+/* 研发待办：抽屉内跟踪时间线（卡片 + 分栏，减轻纵向拥挤） */
+.rd-todo-track-timeline.ant-timeline .ant-timeline-item {
+  padding-bottom: 14px;
+}
+.rd-todo-track-entry {
+  border: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--ant-colorBgContainer, #fff);
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.rd-todo-track-entry--system {
+  background: var(--ant-colorFillAlter, #fafafa);
+}
+.rd-todo-track-entry__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.rd-todo-track-entry__head-actions {
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+.rd-todo-track-entry__kind-tag.ant-tag {
+  margin-inline: 0;
+  font-size: 11px;
+  line-height: 18px;
+}
+@media (max-width: 479px) {
+  .rd-todo-track-entry__head {
+    flex-direction: column;
+    align-items: stretch;
   }
-  .rd-todo-row__actions {
-    flex: 0 0 auto;
-    max-width: 320px;
-    border-top: none;
-    border-left: 1px dashed var(--ant-colorBorderSecondary, #f0f0f0);
-    padding: 8px 12px;
-    align-self: stretch;
+  .rd-todo-track-entry__head-actions {
+    justify-content: flex-start;
   }
+}
+.rd-todo-track-entry__body {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.rd-todo-track-entry__body--has-att {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+@media (max-width: 479px) {
+  .rd-todo-track-entry__body--has-att {
+    grid-template-columns: 1fr;
+  }
+}
+.rd-todo-track-entry__content {
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.55;
+  min-width: 0;
+  word-break: break-word;
+}
+.rd-todo-track-entry__atts {
+  min-width: 0;
+}
+.rd-todo-track-entry__thumb-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  border-radius: 6px;
+}
+.rd-todo-track-entry__thumb-del.ant-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border-radius: 6px;
+  color: #cf1322 !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+.rd-todo-track-entry__thumb-del.ant-btn:hover {
+  background: #fff1f0 !important;
 }
 
 /* 研发文档：左侧文件夹树面板（在文件夹卡片内随列高伸展） */
@@ -1118,14 +1370,15 @@
 .rd-doc-article-page {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 0 8px 32px;
+  padding: 0 8px 40px;
   min-height: min(70vh, 560px);
-  background: var(--ant-colorBgContainer, #fff);
+  background: var(--ant-colorBgLayout, #f0f2f5);
 }
 .rd-doc-article-page__topbar {
-  margin: 0 -8px 8px;
-  padding: 4px 0 8px;
+  margin: 0 -8px 12px;
+  padding: 6px 8px 10px;
   border-bottom: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
+  background: var(--ant-colorBgLayout, #f0f2f5);
 }
 .rd-doc-article-page__loading {
   display: flex;
@@ -1170,10 +1423,11 @@
   display: flex;
   flex-direction: column;
   border: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
-  border-radius: 10px;
-  background: var(--ant-colorFillAlter, #fafafa);
+  border-radius: 12px;
+  background: var(--ant-colorBgContainer, #fff);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   box-sizing: border-box;
-  transition: width 0.2s ease, min-width 0.2s ease;
+  transition: width 0.2s ease, min-width 0.2s ease, box-shadow 0.2s ease;
 }
 .rd-doc-article-page__toc-head {
   display: flex;
@@ -1249,12 +1503,24 @@
 .rd-doc-article-page__main {
   flex: 1;
   min-width: 0;
-  padding: 4px 4px 40px 0;
+  padding: 0 4px 40px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+/* 标题 + 正文：白底「纸张」主阅读区，与页灰底、侧栏、底部元信息区分 */
+.rd-doc-article-page__article-card {
+  background: var(--ant-colorBgContainer, #fff);
+  border-radius: 12px;
+  border: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.08);
+  padding: 28px 32px 36px;
+  box-sizing: border-box;
 }
 .rd-doc-article-page__article-head {
   max-width: 720px;
-  margin: 0 auto 28px;
-  padding-bottom: 20px;
+  margin: 0 auto 24px;
+  padding-bottom: 22px;
   border-bottom: 1px solid var(--ant-colorBorderSecondary, #f0f0f0);
 }
 .rd-doc-article-page__h1.ant-typography {
@@ -1302,6 +1568,7 @@
 .rd-doc-article-page__body.rd-rich-html-preview {
   max-width: 720px;
   margin: 0 auto;
+  padding-top: 8px;
   font-size: 1.0625rem;
   line-height: 1.78;
   color: var(--ant-colorText, rgba(0, 0, 0, 0.88));
@@ -1334,6 +1601,26 @@
   margin: 1.1em 0;
   border-radius: 8px;
 }
+.rd-doc-article-page__doc-meta {
+  margin-top: 32px;
+  padding: 22px 24px 28px;
+  /* 与上方白底正文区区分：整块页底信息用浅灰底 */
+  background: var(--ant-colorFillSecondary, #f5f5f5);
+  border: 1px solid var(--ant-colorBorderSecondary, #e8e8e8);
+  border-radius: 10px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+.rd-doc-article-page__doc-meta-desc .ant-descriptions-item-label {
+  width: 200px;
+  max-width: 40%;
+  background: var(--ant-colorFillAlter, #fafafa) !important;
+}
+.rd-doc-article-page__doc-meta-desc .ant-descriptions-item-content {
+  background: var(--ant-colorBgContainer, #fff) !important;
+}
+.rd-doc-article-page__history-timeline {
+  margin-top: 8px;
+}
 @media (max-width: 900px) {
   .rd-doc-article-page__layout {
     flex-direction: column;
@@ -1347,6 +1634,14 @@
   }
   .rd-doc-article-page__layout--toc-collapsed .rd-doc-article-page__toc-body {
     display: none;
+  }
+  .rd-doc-article-page__article-card {
+    padding: 20px 16px 26px;
+    border-radius: 10px;
+  }
+  .rd-doc-article-page__doc-meta {
+    padding: 18px 16px 24px;
+    margin-top: 24px;
   }
 }
 

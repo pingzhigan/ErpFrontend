@@ -45,6 +45,7 @@ import axios from 'axios'
 import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import {
   buildConstructionAssigneeOptions,
   type AssigneeInactiveRef,
@@ -149,6 +150,10 @@ function extractImageFilesFromClipboard(e: React.ClipboardEvent): File[] {
 
 type PendingCreateImage = { key: string; file: File; previewUrl: string }
 
+/** 新增跟踪：待上传附图（最多 3 张） */
+const TRACK_EXTRA_MAX_IMAGES = 3
+type TrackExtraItem = { key: string; file: File; previewUrl: string }
+
 /** 列表与详情中统一展示日期时间（含截止、完成、更新时间等） */
 function formatDateTime(s: string | null | undefined): string {
   if (s == null || !String(s).trim()) return '—'
@@ -164,7 +169,7 @@ const RdResearchTodosPage: React.FC = () => {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('open')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
 
   const [assigneeRows, setAssigneeRows] = useState<AssigneeUserRow[]>([])
   const [assigneeInactive, setAssigneeInactive] = useState<AssigneeInactiveRef[]>([])
@@ -181,19 +186,18 @@ const RdResearchTodosPage: React.FC = () => {
 
   const [viewOpen, setViewOpen] = useState(false)
   const [viewRow, setViewRow] = useState<RdResearchTodoRow | null>(null)
+  const viewDrawerTrackRef = useRef<HTMLDivElement | null>(null)
 
   const [editAttachments, setEditAttachments] = useState<RdTodoAttachmentRow[]>([])
   const [editAttachPreviewUrls, setEditAttachPreviewUrls] = useState<Record<number, string>>({})
   const [viewAttachments, setViewAttachments] = useState<RdTodoAttachmentRow[]>([])
   const [viewAttachPreviewUrls, setViewAttachPreviewUrls] = useState<Record<number, string>>({})
 
-  const [trackDrawerOpen, setTrackDrawerOpen] = useState(false)
-  const [trackDrawerTodo, setTrackDrawerTodo] = useState<RdResearchTodoRow | null>(null)
   const [trackEntries, setTrackEntries] = useState<RdTodoTrackEntryDto[]>([])
   const [trackLoading, setTrackLoading] = useState(false)
   const [trackSubmitBusy, setTrackSubmitBusy] = useState(false)
   const [trackAttPreviewUrls, setTrackAttPreviewUrls] = useState<Record<number, string>>({})
-  const [trackExtraFiles, setTrackExtraFiles] = useState<File[]>([])
+  const [trackExtraItems, setTrackExtraItems] = useState<TrackExtraItem[]>([])
   const [trackForm] = Form.useForm<{ track_content: string }>()
 
   /** 新建待办：确定前暂存的图片（粘贴或选择），保存时与待办一并上传 */
@@ -416,7 +420,7 @@ const RdResearchTodosPage: React.FC = () => {
   }, [msg])
 
   useEffect(() => {
-    if (!trackDrawerOpen || trackDrawerTodo == null) {
+    if (!viewOpen || viewRow == null) {
       setTrackEntries([])
       setTrackAttPreviewUrls((prev) => {
         Object.values(prev).forEach(URL.revokeObjectURL)
@@ -424,8 +428,8 @@ const RdResearchTodosPage: React.FC = () => {
       })
       return
     }
-    void loadTrackEntriesByTodoId(trackDrawerTodo.id)
-  }, [trackDrawerOpen, trackDrawerTodo, loadTrackEntriesByTodoId])
+    void loadTrackEntriesByTodoId(viewRow.id)
+  }, [viewOpen, viewRow, loadTrackEntriesByTodoId])
 
   useEffect(() => {
     const ids: number[] = []
@@ -463,29 +467,66 @@ const RdResearchTodosPage: React.FC = () => {
     }
   }, [trackEntries])
 
-  const openTrackDrawer = (row: RdResearchTodoRow) => {
-    setTrackDrawerTodo(row)
-    setTrackDrawerOpen(true)
-    trackForm.resetFields()
-    setTrackExtraFiles([])
-  }
+  /** 跟踪附图：压缩后加入列表，最多 3 张 */
+  const appendTrackExtraImages = useCallback(async (files: File[]): Promise<{ added: number; skipped: number }> => {
+    const imageFiles = files.filter((f) => f.type.startsWith('image/'))
+    if (imageFiles.length === 0) return { added: 0, skipped: 0 }
+    let toAdd = imageFiles
+    try {
+      toAdd = await compressImageFilesForUpload(imageFiles)
+    } catch {
+      /* 压缩失败则使用原图 */
+    }
 
-  const closeTrackDrawer = () => {
-    setTrackAttPreviewUrls((prev) => {
-      Object.values(prev).forEach(URL.revokeObjectURL)
-      return {}
+    let added = 0
+    let skipped = 0
+    flushSync(() => {
+      setTrackExtraItems((prev) => {
+        const room = Math.max(0, TRACK_EXTRA_MAX_IMAGES - prev.length)
+        if (room === 0) {
+          skipped = toAdd.length
+          return prev
+        }
+        const slice = toAdd.slice(0, room)
+        skipped = toAdd.length - slice.length
+        const next: TrackExtraItem[] = slice.map((file) => ({
+          key: `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+        }))
+        added = next.length
+        return [...prev, ...next]
+      })
     })
-    setTrackEntries([])
-    setTrackDrawerOpen(false)
-    setTrackDrawerTodo(null)
-    setTrackExtraFiles([])
+    return { added, skipped }
+  }, [])
+
+  const removeTrackExtraItem = useCallback((key: string) => {
+    setTrackExtraItems((prev) => {
+      const hit = prev.find((x) => x.key === key)
+      if (hit) URL.revokeObjectURL(hit.previewUrl)
+      return prev.filter((x) => x.key !== key)
+    })
+  }, [])
+
+  const clearTrackExtraItems = useCallback(() => {
+    setTrackExtraItems((prev) => {
+      prev.forEach((x) => URL.revokeObjectURL(x.previewUrl))
+      return []
+    })
+  }, [])
+
+  const closeViewDrawer = () => {
+    setViewOpen(false)
+    setViewRow(null)
+    clearTrackExtraItems()
     trackForm.resetFields()
   }
 
   const submitTrackRecord = async () => {
-    if (!trackDrawerTodo) return
+    if (!viewRow) return
     const content = (trackForm.getFieldValue('track_content') ?? '').trim()
-    if (!content && trackExtraFiles.length === 0) {
+    if (!content && trackExtraItems.length === 0) {
       msg.warning('请填写跟踪内容或选择图片')
       return
     }
@@ -493,17 +534,17 @@ const RdResearchTodosPage: React.FC = () => {
     try {
       const fd = new FormData()
       fd.append('content', content)
-      const compressed = await compressImageFilesForUpload(trackExtraFiles)
+      const compressed = await compressImageFilesForUpload(trackExtraItems.map((x) => x.file))
       for (const f of compressed) {
         fd.append('file', f)
       }
-      await axios.post(`/api/rd/todos/${trackDrawerTodo.id}/track-entries`, fd, {
+      await axios.post(`/api/rd/todos/${viewRow.id}/track-entries`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       msg.success('已添加跟踪记录')
       trackForm.resetFields()
-      setTrackExtraFiles([])
-      void loadTrackEntriesByTodoId(trackDrawerTodo.id)
+      clearTrackExtraItems()
+      void loadTrackEntriesByTodoId(viewRow.id)
       void fetchList()
     } catch (e: unknown) {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存失败')
@@ -513,11 +554,11 @@ const RdResearchTodosPage: React.FC = () => {
   }
 
   const deleteTrackEntry = async (entryId: number) => {
-    if (!trackDrawerTodo) return
+    if (!viewRow) return
     try {
-      await axios.delete(`/api/rd/todos/${trackDrawerTodo.id}/track-entries/${entryId}`)
+      await axios.delete(`/api/rd/todos/${viewRow.id}/track-entries/${entryId}`)
       msg.success('已删除记录')
-      void loadTrackEntriesByTodoId(trackDrawerTodo.id)
+      void loadTrackEntriesByTodoId(viewRow.id)
       void fetchList()
     } catch (e: unknown) {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '删除失败')
@@ -528,7 +569,7 @@ const RdResearchTodosPage: React.FC = () => {
     try {
       await axios.delete(`/api/rd/todo-track-attachments/${attId}`)
       msg.success('已删除图片')
-      if (trackDrawerTodo) void loadTrackEntriesByTodoId(trackDrawerTodo.id)
+      if (viewRow) void loadTrackEntriesByTodoId(viewRow.id)
       void fetchList()
     } catch (e: unknown) {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '删除失败')
@@ -569,6 +610,16 @@ const RdResearchTodosPage: React.FC = () => {
   const openView = (row: RdResearchTodoRow) => {
     setViewRow(row)
     setViewOpen(true)
+    trackForm.resetFields()
+    clearTrackExtraItems()
+  }
+
+  /** 打开查看抽屉并滚动到「跟踪」区域（列表行「跟踪」按钮） */
+  const openViewFocusTrack = (row: RdResearchTodoRow) => {
+    openView(row)
+    window.setTimeout(() => {
+      viewDrawerTrackRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }, 280)
   }
 
   const closeModal = () => {
@@ -669,6 +720,24 @@ const RdResearchTodosPage: React.FC = () => {
     [editingId, postAttachment, msg, loadEditAttachmentsById, fetchList, addPendingCreateImages],
   )
 
+  const handleTrackPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const imageFiles = extractImageFilesFromClipboard(e)
+      if (imageFiles.length === 0) return
+      e.preventDefault()
+      void (async () => {
+        const { added, skipped } = await appendTrackExtraImages(imageFiles)
+        if (added > 0) {
+          msg.success(`已加入 ${added} 张附图（已压缩，保存跟踪时上传）`)
+        }
+        if (skipped > 0) {
+          msg.warning(`附图最多 ${TRACK_EXTRA_MAX_IMAGES} 张，已忽略多余 ${skipped} 张`)
+        }
+      })()
+    },
+    [appendTrackExtraImages, msg],
+  )
+
   const createPendingUploadProps: UploadProps = useMemo(
     () => ({
       name: 'file',
@@ -733,7 +802,7 @@ const RdResearchTodosPage: React.FC = () => {
     try {
       await axios.put(`/api/rd/todos/${row.id}`, { status: next })
       msg.success(next === 'done' ? '已标记为已完成' : '已重新打开')
-      if (trackDrawerOpen && trackDrawerTodo?.id === row.id) {
+      if (viewOpen && viewRow?.id === row.id) {
         void loadTrackEntriesByTodoId(row.id)
       }
       void fetchList()
@@ -768,6 +837,39 @@ const RdResearchTodosPage: React.FC = () => {
     )
   }
 
+  const renderTodoListHead = () => (
+    <div className="rd-todo-list-head rd-todo-list-cols" role="row">
+      <div className="rd-todo-list-head__accent" aria-hidden />
+      <div className="rd-todo-list-head__col" role="columnheader">
+        主题
+      </div>
+      <div className="rd-todo-list-head__col" role="columnheader">
+        具体内容
+      </div>
+      <div className="rd-todo-list-head__col rd-todo-list-head__col--narrow" role="columnheader">
+        状态
+      </div>
+      <div className="rd-todo-list-head__col" role="columnheader">
+        负责人
+      </div>
+      <div className="rd-todo-list-head__col" role="columnheader">
+        截止
+      </div>
+      <div className="rd-todo-list-head__col" role="columnheader">
+        更新
+      </div>
+      <div className="rd-todo-list-head__col rd-todo-list-head__col--narrow" role="columnheader">
+        主图
+      </div>
+      <div className="rd-todo-list-head__col" role="columnheader">
+        备注
+      </div>
+      <div className="rd-todo-list-head__col rd-todo-list-head__col--actions" role="columnheader">
+        操作
+      </div>
+    </div>
+  )
+
   const renderTodoListRow = (row: RdResearchTodoRow) => {
     const done = row.status === 'done'
     const titleText = (row.title && String(row.title).trim()) || '—'
@@ -786,7 +888,7 @@ const RdResearchTodosPage: React.FC = () => {
     return (
       <div
         key={row.id}
-        className={`rd-todo-row rd-todo-row--${done ? 'done' : 'open'}`}
+        className={`rd-todo-row rd-todo-list-cols rd-todo-row--${done ? 'done' : 'open'}`}
         role="button"
         tabIndex={0}
         onClick={() => openView(row)}
@@ -798,64 +900,63 @@ const RdResearchTodosPage: React.FC = () => {
         }}
       >
         <div className="rd-todo-row__accent" aria-hidden />
-        <div className="rd-todo-row__main">
-          <div className="rd-todo-row__line1">
-            {statusTag(row)}
-            <Text strong className="rd-todo-row__title" ellipsis={{ tooltip: titleText }}>
-              {titleText}
-            </Text>
-          </div>
-          <div className="rd-todo-row__meta">
-            <span>{assigneeLine}</span>
-            <span className="rd-todo-row__meta-sep" aria-hidden>
-              ·
-            </span>
-            <span>{row.due_at && String(row.due_at).trim() ? `截止 ${formatDateTime(row.due_at)}` : '无截止时间'}</span>
-            {hasAtt ? (
-              <>
-                <span className="rd-todo-row__meta-sep" aria-hidden>
-                  ·
-                </span>
-                <Tag icon={<PaperClipOutlined />} color="cyan" className="rd-todo-row__inline-tag">
-                  主图 {nAtt}
-                </Tag>
-              </>
-            ) : null}
-            {nTrack > 0 ? (
-              <>
-                <span className="rd-todo-row__meta-sep" aria-hidden>
-                  ·
-                </span>
-                <Tag icon={<HistoryOutlined />} color="geekblue" className="rd-todo-row__inline-tag">
-                  跟踪 {nTrack}
-                </Tag>
-              </>
-            ) : null}
-            <span className="rd-todo-row__meta-sep" aria-hidden>
-              ·
-            </span>
-            <span>
-              {done
-                ? `完成 ${row.completed_by || '—'} · ${formatDateTime(row.completed_at)}`
-                : `更新 ${row.updated_by || '—'} · ${formatDateTime(row.updated_at)}`}
-            </span>
-          </div>
+        <div className="rd-todo-row__col rd-todo-row__col--title">
+          <Text strong className="rd-todo-row__title" ellipsis={{ tooltip: titleText }}>
+            {titleText}
+          </Text>
+        </div>
+        <div className="rd-todo-row__col rd-todo-row__col--content">
           {contentRaw ? (
-            <Text type="secondary" className="rd-todo-row__excerpt" ellipsis={{ tooltip: true }}>
+            <Text type="secondary" className="rd-todo-row__excerpt" ellipsis={{ rows: 2, tooltip: true }}>
               {contentRaw}
             </Text>
           ) : (
-            <Text type="secondary" className="rd-todo-row__excerpt rd-todo-row__excerpt--muted">
+            <Text type="secondary" className="rd-todo-row__excerpt rd-todo-row__excerpt--muted" ellipsis>
               无具体内容
             </Text>
           )}
-          {notesPlain ? (
-            <Text type="secondary" className="rd-todo-row__excerpt" ellipsis={{ tooltip: true }}>
-              备注：{notesPlain}
-            </Text>
-          ) : null}
         </div>
-        <div className="rd-todo-row__actions" role="presentation" onClick={(e) => e.stopPropagation()}>
+        <div className="rd-todo-row__col rd-todo-row__col--status">{statusTag(row)}</div>
+        <div className="rd-todo-row__col rd-todo-row__col--assignee">
+          <Text type="secondary" className="rd-todo-row__cell-text" ellipsis={{ tooltip: assigneeLine }}>
+            {assigneeLine}
+          </Text>
+        </div>
+        <div className="rd-todo-row__col rd-todo-row__col--due">
+          <Text type="secondary" className="rd-todo-row__cell-text" ellipsis>
+            {row.due_at && String(row.due_at).trim() ? formatDateTime(row.due_at) : '无'}
+          </Text>
+        </div>
+        <div className="rd-todo-row__col rd-todo-row__col--updated">
+          <Text type="secondary" className="rd-todo-row__cell-text" ellipsis={{ tooltip: true }}>
+            {done
+              ? `${row.completed_by || '—'} · ${formatDateTime(row.completed_at)}`
+              : `${row.updated_by || '—'} · ${formatDateTime(row.updated_at)}`}
+          </Text>
+        </div>
+        <div className="rd-todo-row__col rd-todo-row__col--attach">
+          {hasAtt ? (
+            <Tag icon={<PaperClipOutlined />} color="cyan" className="rd-todo-row__inline-tag">
+              {nAtt}
+            </Tag>
+          ) : (
+            <Text type="secondary" className="rd-todo-row__cell-text rd-todo-row__cell-text--muted">
+              —
+            </Text>
+          )}
+        </div>
+        <div className="rd-todo-row__col rd-todo-row__col--notes">
+          {notesPlain ? (
+            <Text type="secondary" className="rd-todo-row__excerpt" ellipsis={{ rows: 1, tooltip: true }}>
+              {notesPlain}
+            </Text>
+          ) : (
+            <Text type="secondary" className="rd-todo-row__cell-text rd-todo-row__cell-text--muted">
+              —
+            </Text>
+          )}
+        </div>
+        <div className="rd-todo-row__col rd-todo-row__col--actions" role="presentation" onClick={(e) => e.stopPropagation()}>
           <Space size={0} wrap className="rd-todo-row__action-icons">
             <Tooltip title="查看详情">
               <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => openView(row)} />
@@ -868,15 +969,38 @@ const RdResearchTodosPage: React.FC = () => {
             </Popconfirm>
           </Space>
           <Space size={4} wrap className="rd-todo-row__action-btns">
+            {done ? (
+              <Button
+                type="default"
+                size="small"
+                icon={<RollbackOutlined />}
+                onClick={() => void setRowStatus(row, 'open')}
+              >
+                重新打开
+              </Button>
+            ) : (
+              <Popconfirm
+                title="确定将该待办标记为已完成？"
+                description="完成后可在「已完成」中查看，也可再点「重新打开」。"
+                okText="确定完成"
+                cancelText="取消"
+                onConfirm={() => void setRowStatus(row, 'done')}
+              >
+                <Button type="primary" size="small" icon={<CheckCircleOutlined />} onClick={(e) => e.stopPropagation()}>
+                  完成
+                </Button>
+              </Popconfirm>
+            )}
             <Button
-              type={done ? 'default' : 'primary'}
+              color="primary"
+              variant="link"
               size="small"
-              icon={done ? <RollbackOutlined /> : <CheckCircleOutlined />}
-              onClick={() => void setRowStatus(row, done ? 'open' : 'done')}
+              icon={<HistoryOutlined />}
+              onClick={(e) => {
+                e.stopPropagation()
+                openViewFocusTrack(row)
+              }}
             >
-              {done ? '重新打开' : '完成'}
-            </Button>
-            <Button color="primary" variant="link" size="small" icon={<HistoryOutlined />} onClick={() => openTrackDrawer(row)}>
               跟踪{nTrack > 0 ? `(${nTrack})` : ''}
             </Button>
           </Space>
@@ -921,7 +1045,7 @@ const RdResearchTodosPage: React.FC = () => {
               研发待办
             </Title>
             <Text type="secondary" className="header-desc" style={{ display: 'block' }}>
-              紧凑列表区分进行中 / 已完成；点击行查看详情；支持主附件与跟踪（可附图）；右侧可快速完成或写跟踪。
+              默认显示全部；可用分段筛选进行中 / 已完成。表头与各列对齐，内容区最多两行，窄屏可横向滚动整表。点击行在右侧抽屉查看详情与跟踪；右侧可完成或打开跟踪区。
             </Text>
           </div>
         </div>
@@ -978,7 +1102,12 @@ const RdResearchTodosPage: React.FC = () => {
           {list.length === 0 && !loading ? (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无待办" />
           ) : (
-            <div className="rd-todo-list rd-todo-list--bordered">{list.map((row) => renderTodoListRow(row))}</div>
+            <div className="rd-todo-list-shell">
+              <div className="rd-todo-list rd-todo-list--bordered">
+                {renderTodoListHead()}
+                {list.map((row) => renderTodoListRow(row))}
+              </div>
+            </div>
           )}
         </Spin>
         {total > 0 ? (
@@ -1145,175 +1274,238 @@ const RdResearchTodosPage: React.FC = () => {
         </Form>
       </Modal>
 
-      <Modal title="查看待办" open={viewOpen} onCancel={() => setViewOpen(false)} footer={null} width={640} destroyOnHidden>
-        {viewRow && (
-          <Descriptions column={1} size="small" bordered>
-            <Descriptions.Item label="状态">{statusTag(viewRow)}</Descriptions.Item>
-            <Descriptions.Item label="主题名称">{viewRow.title}</Descriptions.Item>
-            <Descriptions.Item label="具体内容">
-              <div style={{ whiteSpace: 'pre-wrap' }}>{viewRow.content?.trim() ? viewRow.content : '—'}</div>
-            </Descriptions.Item>
-            <Descriptions.Item label="负责人员">
-              {parseAssigneeList(viewRow.assignee_usernames).length === 0 ? (
-                '—'
-              ) : (
-                <Space size={[4, 4]} wrap>
-                  {parseAssigneeList(viewRow.assignee_usernames).map((u) => (
-                    <Tag key={u} color="blue">
-                      {assigneeLabelByUser.get(u) ?? labelForAssigneeUsername(u, null)}
-                    </Tag>
-                  ))}
-                </Space>
-              )}
-            </Descriptions.Item>
-            <Descriptions.Item label="截止时间">{formatDateTime(viewRow.due_at)}</Descriptions.Item>
-            <Descriptions.Item label="备注">
-              {viewRow.notes?.trim() ? (
-                <div style={{ whiteSpace: 'pre-wrap' }}>
-                  {viewRow.notes.includes('<') ? stripHtml(viewRow.notes) : viewRow.notes}
-                </div>
-              ) : (
-                '—'
-              )}
-            </Descriptions.Item>
-            {viewAttachments.length > 0 && (
-              <Descriptions.Item label="图片附件">
-                <Image.PreviewGroup>
-                  <Space wrap>
-                    {viewAttachments.map((a) =>
-                      viewAttachPreviewUrls[a.id] ? (
-                        <Image
-                          key={a.id}
-                          width={120}
-                          src={viewAttachPreviewUrls[a.id]}
-                          alt={a.file_name}
-                          style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #f0f0f0' }}
-                        />
-                      ) : null,
-                    )}
-                  </Space>
-                </Image.PreviewGroup>
-              </Descriptions.Item>
-            )}
-            {viewRow.status === 'done' && (
-              <Descriptions.Item label="完成信息">
-                {(viewRow.completed_by || '—') + ' · ' + formatDateTime(viewRow.completed_at)}
-              </Descriptions.Item>
-            )}
-            <Descriptions.Item label="更新人 / 时间">
-              {(viewRow.updated_by || '—') + ' · ' + formatDateTime(viewRow.updated_at)}
-            </Descriptions.Item>
-          </Descriptions>
-        )}
-      </Modal>
-
       <Drawer
-        title={trackDrawerTodo ? `跟踪记录 · ${trackDrawerTodo.title}` : '跟踪记录'}
+        title={viewRow ? `待办详情 · ${viewRow.title}` : '待办详情'}
         placement="right"
-        width={Math.min(560, typeof window !== 'undefined' ? window.innerWidth - 24 : 560)}
-        open={trackDrawerOpen}
-        onClose={closeTrackDrawer}
+        width={Math.min(720, typeof window !== 'undefined' ? window.innerWidth - 24 : 720)}
+        open={viewOpen}
+        onClose={closeViewDrawer}
         destroyOnHidden
       >
-        {trackDrawerTodo ? (
+        {viewRow ? (
           <>
-            <Space style={{ marginBottom: 12 }} wrap>
-              {statusTag(trackDrawerTodo)}
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                闭环：在卡片上切换「完成 / 重新打开」将自动写入一条系统跟踪。
-              </Text>
-            </Space>
-            <Spin spinning={trackLoading}>
-              <Timeline
-                style={{ marginTop: 8 }}
-                items={[...trackEntries].reverse().map((en) => ({
-                  key: en.id,
-                  color: en.kind === 'system' ? 'gray' : 'blue',
-                  children: (
-                    <div>
-                      <div style={{ whiteSpace: 'pre-wrap', marginBottom: 4 }}>{en.content?.trim() ? en.content : '—'}</div>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {en.created_by || '—'} · {formatDateTime(en.created_at)}
-                      </Text>
-                      {en.attachments && en.attachments.length > 0 ? (
-                        <Image.PreviewGroup>
-                          <Space wrap style={{ marginTop: 8 }}>
-                            {en.attachments.map((a) =>
-                              trackAttPreviewUrls[a.id] ? (
-                                <div key={a.id} style={{ width: 76 }}>
-                                  <Image
-                                    width={72}
-                                    height={72}
-                                    src={trackAttPreviewUrls[a.id]}
-                                    alt={a.file_name}
-                                    style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #f0f0f0' }}
-                                  />
-                                  {en.kind === 'user' ? (
-                                    <div style={{ textAlign: 'center' }}>
-                                      <Popconfirm title="删除该图？" onConfirm={() => void deleteTrackAttachment(a.id)}>
-                                        <Button type="link" size="small" danger style={{ padding: 0, height: 22 }}>
-                                          删图
-                                        </Button>
-                                      </Popconfirm>
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ) : null,
-                            )}
-                          </Space>
-                        </Image.PreviewGroup>
-                      ) : null}
-                      {en.kind === 'user' ? (
-                        <div style={{ marginTop: 6 }}>
-                          <Popconfirm title="删除整条跟踪记录？" onConfirm={() => void deleteTrackEntry(en.id)}>
-                            <Button type="link" size="small" danger style={{ padding: 0, height: 22 }}>
-                              删除记录
-                            </Button>
-                          </Popconfirm>
-                        </div>
-                      ) : null}
-                    </div>
-                  ),
-                }))}
-              />
-            </Spin>
-            <Divider style={{ margin: '16px 0' }}>新增跟踪</Divider>
-            <Form form={trackForm} layout="vertical">
-              <Form.Item name="track_content" label="跟踪说明">
-                <Input.TextArea rows={3} placeholder="进展、问题、下一步等（可与附图同时提交）" maxLength={10000} showCount />
-              </Form.Item>
-              <Form.Item label="附图（浏览器侧压缩后上传）">
-                <Upload
-                  multiple
-                  accept="image/*"
-                  showUploadList={false}
-                  beforeUpload={(file) => {
-                    setTrackExtraFiles((p) => [...p, file])
-                    return false
-                  }}
-                >
-                  <Button icon={<UploadOutlined />} size="small">
-                    选择图片
-                  </Button>
-                </Upload>
-                {trackExtraFiles.length > 0 ? (
-                  <Space wrap style={{ marginTop: 8 }}>
-                    {trackExtraFiles.map((f, idx) => (
-                      <Tag
-                        key={`${f.name}-${idx}-${f.size}`}
-                        closable
-                        onClose={() => setTrackExtraFiles((p) => p.filter((_, i) => i !== idx))}
-                      >
-                        {f.name}
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="状态">{statusTag(viewRow)}</Descriptions.Item>
+              <Descriptions.Item label="主题名称">{viewRow.title}</Descriptions.Item>
+              <Descriptions.Item label="具体内容">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{viewRow.content?.trim() ? viewRow.content : '—'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="负责人员">
+                {parseAssigneeList(viewRow.assignee_usernames).length === 0 ? (
+                  '—'
+                ) : (
+                  <Space size={[4, 4]} wrap>
+                    {parseAssigneeList(viewRow.assignee_usernames).map((u) => (
+                      <Tag key={u} color="blue">
+                        {assigneeLabelByUser.get(u) ?? labelForAssigneeUsername(u, null)}
                       </Tag>
                     ))}
                   </Space>
+                )}
+              </Descriptions.Item>
+              <Descriptions.Item label="截止时间">{formatDateTime(viewRow.due_at)}</Descriptions.Item>
+              <Descriptions.Item label="备注">
+                {viewRow.notes?.trim() ? (
+                  <div style={{ whiteSpace: 'pre-wrap' }}>
+                    {viewRow.notes.includes('<') ? stripHtml(viewRow.notes) : viewRow.notes}
+                  </div>
+                ) : (
+                  '—'
+                )}
+              </Descriptions.Item>
+              {viewAttachments.length > 0 && (
+                <Descriptions.Item label="图片附件">
+                  <Image.PreviewGroup>
+                    <Space wrap>
+                      {viewAttachments.map((a) =>
+                        viewAttachPreviewUrls[a.id] ? (
+                          <Image
+                            key={a.id}
+                            width={120}
+                            src={viewAttachPreviewUrls[a.id]}
+                            alt={a.file_name}
+                            style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #f0f0f0' }}
+                          />
+                        ) : null,
+                      )}
+                    </Space>
+                  </Image.PreviewGroup>
+                </Descriptions.Item>
+              )}
+              {viewRow.status === 'done' && (
+                <Descriptions.Item label="完成信息">
+                  {(viewRow.completed_by || '—') + ' · ' + formatDateTime(viewRow.completed_at)}
+                </Descriptions.Item>
+              )}
+              <Descriptions.Item label="更新人 / 时间">
+                {(viewRow.updated_by || '—') + ' · ' + formatDateTime(viewRow.updated_at)}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <Divider style={{ margin: '20px 0 12px' }} />
+            <div ref={viewDrawerTrackRef}>
+              <Title level={5} style={{ marginTop: 0, marginBottom: 10 }}>
+                跟踪记录
+              </Title>
+              <Space style={{ marginBottom: 12 }} wrap>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  闭环：在列表上切换「完成 / 重新打开」将自动写入一条系统跟踪。
+                </Text>
+              </Space>
+              <Spin spinning={trackLoading}>
+                <Timeline
+                  className="rd-todo-track-timeline"
+                  style={{ marginTop: 8 }}
+                  items={[...trackEntries].reverse().map((en) => {
+                    const hasAtt = Boolean(en.attachments?.length)
+                    return {
+                      key: en.id,
+                      color: en.kind === 'system' ? 'gray' : 'blue',
+                      children: (
+                        <div
+                          className={`rd-todo-track-entry rd-todo-track-entry--${en.kind === 'system' ? 'system' : 'user'}`}
+                        >
+                          <div className="rd-todo-track-entry__head">
+                            <Text type="secondary" className="rd-todo-track-entry__meta">
+                              {en.created_by || '—'} · {formatDateTime(en.created_at)}
+                            </Text>
+                            <Space size={6} wrap className="rd-todo-track-entry__head-actions">
+                              <Tag color={en.kind === 'system' ? 'default' : 'processing'} className="rd-todo-track-entry__kind-tag">
+                                {en.kind === 'system' ? '系统' : '用户'}
+                              </Tag>
+                              {en.kind === 'user' ? (
+                                <Popconfirm title="删除整条跟踪记录？" onConfirm={() => void deleteTrackEntry(en.id)}>
+                                  <Button type="link" size="small" danger style={{ padding: 0, height: 22 }}>
+                                    删除记录
+                                  </Button>
+                                </Popconfirm>
+                              ) : null}
+                            </Space>
+                          </div>
+                          <div
+                            className={`rd-todo-track-entry__body${hasAtt ? ' rd-todo-track-entry__body--has-att' : ''}`}
+                          >
+                            <div className="rd-todo-track-entry__content">
+                              {en.content?.trim() ? en.content : '—'}
+                            </div>
+                            {hasAtt ? (
+                              <div className="rd-todo-track-entry__atts">
+                                <Image.PreviewGroup>
+                                  <Space wrap size={8}>
+                                    {en.attachments.map((a) =>
+                                      trackAttPreviewUrls[a.id] ? (
+                                        <div key={a.id} className="rd-todo-track-entry__thumb-wrap">
+                                          <Image
+                                            width={80}
+                                            height={80}
+                                            src={trackAttPreviewUrls[a.id]}
+                                            alt={a.file_name}
+                                            className="rd-todo-track-entry__thumb"
+                                            style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #f0f0f0' }}
+                                          />
+                                          {en.kind === 'user' ? (
+                                            <Popconfirm title="删除该图？" onConfirm={() => void deleteTrackAttachment(a.id)}>
+                                              <Button
+                                                type="text"
+                                                size="small"
+                                                danger
+                                                icon={<DeleteOutlined />}
+                                                aria-label="删图"
+                                                className="rd-todo-track-entry__thumb-del"
+                                              />
+                                            </Popconfirm>
+                                          ) : null}
+                                        </div>
+                                      ) : null,
+                                    )}
+                                  </Space>
+                                </Image.PreviewGroup>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ),
+                    }
+                  })}
+                />
+              </Spin>
+              <Divider style={{ margin: '16px 0' }}>新增跟踪</Divider>
+              <Form form={trackForm} layout="vertical">
+                <Form.Item name="track_content" label="跟踪说明">
+                  <Input.TextArea
+                    rows={3}
+                    placeholder={`进展、问题、下一步等；可在框内粘贴截图（最多 ${TRACK_EXTRA_MAX_IMAGES} 张，自动压缩）`}
+                    maxLength={10000}
+                    showCount
+                    onPaste={handleTrackPaste}
+                  />
+                </Form.Item>
+                {trackExtraItems.length > 0 ? (
+                  <div style={{ marginBottom: 16 }}>
+                    <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+                      附图预览（{trackExtraItems.length}/{TRACK_EXTRA_MAX_IMAGES}）· 点击缩略图查看大图
+                    </Text>
+                    <Image.PreviewGroup>
+                      <Space wrap size="middle">
+                        {trackExtraItems.map((it) => (
+                          <div key={it.key} style={{ position: 'relative', width: 92 }}>
+                            <Image
+                              width={84}
+                              height={84}
+                              src={it.previewUrl}
+                              alt={it.file.name}
+                              style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid #f0f0f0' }}
+                            />
+                            <div style={{ textAlign: 'center', marginTop: 4 }}>
+                              <Button type="link" size="small" danger onClick={() => removeTrackExtraItem(it.key)}>
+                                移除
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </Space>
+                    </Image.PreviewGroup>
+                  </div>
                 ) : null}
-              </Form.Item>
-              <Button type="primary" loading={trackSubmitBusy} onClick={() => void submitTrackRecord()}>
-                保存跟踪记录
-              </Button>
-            </Form>
+                <Form.Item
+                  label={
+                    <span>
+                      附图 <Text type="secondary">（最多 {TRACK_EXTRA_MAX_IMAGES} 张，浏览器侧压缩）</Text>
+                    </span>
+                  }
+                >
+                  <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                    <Upload
+                      multiple
+                      accept="image/*"
+                      showUploadList={false}
+                      disabled={trackExtraItems.length >= TRACK_EXTRA_MAX_IMAGES}
+                      beforeUpload={(file) => {
+                        void appendTrackExtraImages([file as File]).then(({ added, skipped }) => {
+                          if (added > 0) msg.success(`已加入 ${added} 张附图`)
+                          if (skipped > 0) {
+                            msg.warning(`附图最多 ${TRACK_EXTRA_MAX_IMAGES} 张，未加入 ${skipped} 张`)
+                          }
+                        })
+                        return false
+                      }}
+                    >
+                      <Button icon={<UploadOutlined />} size="small" disabled={trackExtraItems.length >= TRACK_EXTRA_MAX_IMAGES}>
+                        选择图片
+                      </Button>
+                    </Upload>
+                    {trackExtraItems.length >= TRACK_EXTRA_MAX_IMAGES ? (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        已达上限，移除上方预览中的图片后可继续添加。
+                      </Text>
+                    ) : null}
+                  </Space>
+                </Form.Item>
+                <Button type="primary" loading={trackSubmitBusy} onClick={() => void submitTrackRecord()}>
+                  保存跟踪记录
+                </Button>
+              </Form>
+            </div>
           </>
         ) : null}
       </Drawer>

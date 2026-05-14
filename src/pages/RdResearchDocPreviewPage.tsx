@@ -2,7 +2,7 @@
  * 研发文档 — 富文本文档独立阅读页（左目录 + 正文），与编辑页内预览分离。
  */
 import { ArrowLeftOutlined, MenuFoldOutlined, MenuUnfoldOutlined, UnorderedListOutlined } from '@ant-design/icons'
-import { App, Button, Empty, Spin, Typography } from 'antd'
+import { App, Button, Descriptions, Empty, Spin, Timeline, Typography } from 'antd'
 import axios from 'axios'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -13,7 +13,22 @@ import { prepareRdDocArticleHtmlAndToc, type RdDocTocItem } from '../utils/rdDoc
 
 const { Text, Title } = Typography
 
+function formatDocBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '—'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`
+  return `${(n / (1024 * 1024)).toFixed(n < 10 * 1024 * 1024 ? 1 : 1)} MB`
+}
+
 type FolderRow = { id: number; parent_id: number | null; name: string; created_at: string }
+
+type RdRichtextEditHistoryItem = {
+  id: number
+  edited_at: string
+  edited_by: string | null
+  edited_by_display?: string
+  edit_summary: string
+}
 
 type RdRichtextFull = {
   id: number
@@ -24,6 +39,18 @@ type RdRichtextFull = {
   updated_at: string
   created_by: string | null
   updated_by: string | null
+  created_by_display?: string
+  updated_by_display?: string
+  storage_bytes?: number
+  edit_history?: RdRichtextEditHistoryItem[]
+}
+
+/** 后端返回「姓名（用户名）」；旧接口仅有 username 时回退 */
+function personDisplay(display: string | undefined, username: string | null | undefined): string {
+  const d = display != null ? String(display).trim() : ''
+  if (d) return d
+  const u = username != null ? String(username).trim() : ''
+  return u || '—'
 }
 
 function folderPathLabel(folders: FolderRow[], id: number): string {
@@ -106,11 +133,24 @@ const RdResearchDocPreviewPage: React.FC = () => {
     return { articleHtml: withToken, tocItems: toc }
   }, [doc?.body_html, user?.token])
 
+  const headlineEditor = useMemo(() => {
+    if (!doc) return '—'
+    const u = personDisplay(doc.updated_by_display, doc.updated_by)
+    if (u !== '—') return u
+    return personDisplay(doc.created_by_display, doc.created_by)
+  }, [doc])
+
+  const headlineEditorInitial = useMemo(() => {
+    if (headlineEditor === '—') return '?'
+    return headlineEditor.charAt(0).toUpperCase()
+  }, [headlineEditor])
+
   const metaLine = useMemo(() => {
     if (!doc) return ''
     const parts: string[] = []
     if (doc.updated_at) parts.push(`更新于 ${doc.updated_at}`)
-    if (doc.updated_by) parts.push(`编辑 ${doc.updated_by}`)
+    const editor = personDisplay(doc.updated_by_display, doc.updated_by)
+    if (editor !== '—') parts.push(`编辑 ${editor}`)
     return parts.join(' · ')
   }, [doc])
 
@@ -185,34 +225,77 @@ const RdResearchDocPreviewPage: React.FC = () => {
           </aside>
 
           <main className="rd-doc-article-page__main">
-            <header className="rd-doc-article-page__article-head">
-              <Title level={1} className="rd-doc-article-page__h1">
-                {doc.title}
-              </Title>
-              <div className="rd-doc-article-page__meta-block">
-                <div className="rd-doc-article-page__avatar" aria-hidden>
-                  {(doc.updated_by || doc.created_by || '?').slice(0, 1).toUpperCase()}
-                </div>
-                <div className="rd-doc-article-page__meta-text">
-                  <div className="rd-doc-article-page__author-line">
-                    <Text strong>{doc.updated_by || doc.created_by || '—'}</Text>
+            <article className="rd-doc-article-page__article-card">
+              <header className="rd-doc-article-page__article-head">
+                <Title level={1} className="rd-doc-article-page__h1">
+                  {doc.title}
+                </Title>
+                <div className="rd-doc-article-page__meta-block">
+                  <div className="rd-doc-article-page__avatar" aria-hidden>
+                    {headlineEditorInitial}
                   </div>
-                  <Text type="secondary" className="rd-doc-article-page__folder-line">
-                    {folderLabel || '—'}
-                  </Text>
+                  <div className="rd-doc-article-page__meta-text">
+                    <div className="rd-doc-article-page__author-line">
+                      <Text strong>{headlineEditor}</Text>
+                    </div>
+                    <Text type="secondary" className="rd-doc-article-page__folder-line">
+                      {folderLabel || '—'}
+                    </Text>
+                  </div>
                 </div>
-              </div>
-              {metaLine ? (
-                <Text type="secondary" className="rd-doc-article-page__social-line">
-                  {metaLine}
-                </Text>
-              ) : null}
-            </header>
+                {metaLine ? (
+                  <Text type="secondary" className="rd-doc-article-page__social-line">
+                    {metaLine}
+                  </Text>
+                ) : null}
+              </header>
 
-            <div
-              className="rd-doc-article-page__body rd-rich-html-preview"
-              dangerouslySetInnerHTML={{ __html: articleHtml }}
-            />
+              <div
+                className="rd-doc-article-page__body rd-rich-html-preview"
+                dangerouslySetInnerHTML={{ __html: articleHtml }}
+              />
+            </article>
+
+            <footer className="rd-doc-article-page__doc-meta">
+              <Title level={5} style={{ marginBottom: 12 }}>
+                文档信息
+              </Title>
+              <Descriptions column={1} size="small" bordered className="rd-doc-article-page__doc-meta-desc">
+                <Descriptions.Item label="文档大小（正文 HTML + 内嵌图）">
+                  {doc.storage_bytes != null ? formatDocBytes(doc.storage_bytes) : '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="创建时间">{doc.created_at || '—'}</Descriptions.Item>
+                <Descriptions.Item label="创建人">{personDisplay(doc.created_by_display, doc.created_by)}</Descriptions.Item>
+                <Descriptions.Item label="最近更新">{doc.updated_at || '—'}</Descriptions.Item>
+                <Descriptions.Item label="最近编辑人">{personDisplay(doc.updated_by_display, doc.updated_by)}</Descriptions.Item>
+              </Descriptions>
+
+              <Title level={5} style={{ margin: '20px 0 12px' }}>
+                修改记录
+              </Title>
+              {doc.edit_history && doc.edit_history.length > 0 ? (
+                <Timeline
+                  className="rd-doc-article-page__history-timeline"
+                  items={doc.edit_history.map((h) => {
+                    const who = personDisplay(h.edited_by_display, h.edited_by)
+                    return {
+                      key: h.id,
+                      children: (
+                        <div>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            {h.edited_at}
+                            {who !== '—' ? ` · ${who}` : ''}
+                          </Text>
+                          <div style={{ marginTop: 4 }}>{h.edit_summary}</div>
+                        </div>
+                      ),
+                    }
+                  })}
+                />
+              ) : (
+                <Text type="secondary">暂无保存记录（保存文档并填写编辑说明后将显示在此）</Text>
+              )}
+            </footer>
           </main>
         </div>
       )}

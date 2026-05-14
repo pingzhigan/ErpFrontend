@@ -16,6 +16,7 @@ import {
   appendAccessTokenToImgPreviewUrls,
   stripAccessTokenFromImgPreviewUrls,
 } from '../utils/rdRichPreviewAuthUrls'
+import { sanitizeRdRichBodyHtml } from '../utils/rdRichHtmlSanitize'
 import {
   rdBodyHtmlContainsDataImage,
   rdResolveBodyHtmlDataImages,
@@ -44,6 +45,8 @@ export type RdDocFileRow = {
   file_size: number
   created_at: string
   created_by: string | null
+  /** 列表接口补充：姓名（用户名） */
+  created_by_display?: string
 }
 
 export type RdRichtextListRow = {
@@ -54,6 +57,8 @@ export type RdRichtextListRow = {
   updated_at: string
   created_by: string | null
   updated_by: string | null
+  created_by_display?: string
+  updated_by_display?: string
   /** doc-library 等列表：正文内嵌图 + HTML 近似占用（字节） */
   storage_bytes?: number
 }
@@ -171,6 +176,12 @@ const RdResearchDocsPage: React.FC = () => {
     exceeded: boolean
     warnLowRemaining: boolean
   } | null>(null)
+
+  const [richSaveNoteOpen, setRichSaveNoteOpen] = useState(false)
+  const [richSaveNote, setRichSaveNote] = useState('')
+  const [moveFileOpen, setMoveFileOpen] = useState(false)
+  const [moveFileRow, setMoveFileRow] = useState<RdDocFileRow | null>(null)
+  const [moveForm] = Form.useForm<{ target_folder_id: number }>()
 
   const loadStorageUsage = useCallback(async () => {
     try {
@@ -431,7 +442,8 @@ const RdResearchDocsPage: React.FC = () => {
   }
 
   const downloadRichtextHtml = (title: string, html: string) => {
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+    const safe = sanitizeRdRichBodyHtml(html)
+    const blob = new Blob([safe], { type: 'text/html;charset=utf-8' })
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -518,7 +530,7 @@ const RdResearchDocsPage: React.FC = () => {
       const title = res.data?.title ?? doc.title
       setRichTitleInitial(title)
       setRichEditingId(doc.id)
-      setRichBodyHtml(appendAccessTokenToImgPreviewUrls(res.data?.body_html ?? '', user?.token))
+      setRichBodyHtml(appendAccessTokenToImgPreviewUrls(sanitizeRdRichBodyHtml(res.data?.body_html ?? ''), user?.token))
       setRichEditorMountKey((k) => k + 1)
       setRichEditorOpen(true)
     } catch (e: unknown) {
@@ -539,7 +551,30 @@ const RdResearchDocsPage: React.FC = () => {
     void loadStorageUsage()
   }
 
-  const submitRichModal = async () => {
+  const DEFAULT_RICH_EDIT_SUMMARY = '常规保存'
+
+  const startRichSave = async () => {
+    try {
+      await richTitleForm.validateFields()
+      setRichSaveNote('')
+      setRichSaveNoteOpen(true)
+    } catch {
+      /* 标题未通过校验 */
+    }
+  }
+
+  const confirmRichSaveNote = async () => {
+    try {
+      await richTitleForm.validateFields()
+    } catch {
+      return
+    }
+    const summary = richSaveNote.trim() || DEFAULT_RICH_EDIT_SUMMARY
+    setRichSaveNoteOpen(false)
+    await executeRichSave(summary)
+  }
+
+  const executeRichSave = async (editSummary: string) => {
     if (effectiveFolderId == null) return
     try {
       const { title } = await richTitleForm.validateFields()
@@ -550,13 +585,14 @@ const RdResearchDocsPage: React.FC = () => {
       }
       const htmlSource = stripAccessTokenFromImgPreviewUrls(richEditorRef.current?.getHtml() ?? richBodyHtml)
       const hasDataImg = rdBodyHtmlContainsDataImage(htmlSource)
+      const logPayload = { edit_summary: editSummary }
 
       if (richEditingId == null) {
         if (hasDataImg) {
           const stubHtml = rdStripInlineDataImagesForCreate(htmlSource)
           const createRes = await axios.post<{ id: number; title: string; body_html: string }>(
             `/api/rd/doc-folders/${effectiveFolderId}/richtext-docs`,
-            { title: t, body_html: stubHtml },
+            { title: t, body_html: stubHtml, ...logPayload },
           )
           const newId = createRes.data?.id
           if (!Number.isInteger(newId) || newId < 1) {
@@ -565,7 +601,7 @@ const RdResearchDocsPage: React.FC = () => {
           }
           try {
             const bodyToSave = await rdResolveBodyHtmlDataImages(htmlSource, (file) => uploadRichBodyImageForDocId(newId, file))
-            await axios.put(`/api/rd/richtext-docs/${newId}`, { title: t, body_html: bodyToSave })
+            await axios.put(`/api/rd/richtext-docs/${newId}`, { title: t, body_html: bodyToSave, ...logPayload })
           } catch (resolveErr) {
             try {
               await axios.put(`/api/rd/richtext-docs/${newId}`, { title: t, body_html: stubHtml })
@@ -576,7 +612,7 @@ const RdResearchDocsPage: React.FC = () => {
             return
           }
         } else {
-          await axios.post(`/api/rd/doc-folders/${effectiveFolderId}/richtext-docs`, { title: t, body_html: htmlSource })
+          await axios.post(`/api/rd/doc-folders/${effectiveFolderId}/richtext-docs`, { title: t, body_html: htmlSource, ...logPayload })
         }
       } else {
         let bodyToSave = htmlSource
@@ -588,7 +624,7 @@ const RdResearchDocsPage: React.FC = () => {
             return
           }
         }
-        await axios.put(`/api/rd/richtext-docs/${richEditingId}`, { title: t, body_html: bodyToSave })
+        await axios.put(`/api/rd/richtext-docs/${richEditingId}`, { title: t, body_html: bodyToSave, ...logPayload })
       }
       msg.success('已保存')
       closeRichModal()
@@ -600,10 +636,6 @@ const RdResearchDocsPage: React.FC = () => {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存失败')
     }
   }
-
-  const [moveFileOpen, setMoveFileOpen] = useState(false)
-  const [moveFileRow, setMoveFileRow] = useState<RdDocFileRow | null>(null)
-  const [moveForm] = Form.useForm<{ target_folder_id: number }>()
 
   const openMoveFile = (row: RdDocFileRow) => {
     setMoveFileRow(row)
@@ -847,7 +879,7 @@ const RdResearchDocsPage: React.FC = () => {
                     </Button>
                   ) : null}
                   <Button onClick={handleRichModalCancel}>取消</Button>
-                  <Button type="primary" onClick={() => void submitRichModal()}>
+                  <Button type="primary" onClick={() => void startRichSave()}>
                     保存
                   </Button>
                 </Space>
@@ -985,6 +1017,28 @@ const RdResearchDocsPage: React.FC = () => {
             )}
           </>
         )}
+      </Modal>
+
+      <Modal
+        title="保存文档"
+        open={richSaveNoteOpen}
+        okText="确定保存"
+        cancelText="取消"
+        onOk={() => void confirmRichSaveNote()}
+        onCancel={() => setRichSaveNoteOpen(false)}
+        destroyOnHidden
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 10 }}>
+          可选填本次修改说明；留空将记录为「{DEFAULT_RICH_EDIT_SUMMARY}」
+        </Text>
+        <Input.TextArea
+          value={richSaveNote}
+          onChange={(e) => setRichSaveNote(e.target.value)}
+          placeholder="例如：补充第三节、修正错别字、更新截图…"
+          rows={3}
+          maxLength={500}
+          showCount
+        />
       </Modal>
     </Space>
   )

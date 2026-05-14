@@ -1,6 +1,6 @@
 /**
  * 维护管理 - 零星工程
- * 业务流：① 分配到部门（部门负责人）→ ② 由部门负责人分配施工人员（闭环前须补全）→ ③ 派单确认（指定部门负责人后即可填写派单信息）→ ④ 跟踪 → ⑤ 闭环。分配与转派写入跟踪时间线（track_kind）。
+ * 业务流：① 分配到部门（部门负责人）→ ② 按日分派施工人员并记录（闭环前须至少一日有人员）→ ③ 派单确认 → ④ 跟踪 → ⑤ 闭环。负责人与按日施工人员写入跟踪时间线。
  */
 import {
   FormOutlined,
@@ -31,6 +31,7 @@ import {
   Popconfirm,
   Popover,
   Progress,
+  Radio,
   Select,
   Slider,
   Space,
@@ -166,6 +167,43 @@ type MinorWorkOrder = {
   audit?: GateAudit
 }
 
+type MinorWorkWorkerPeriod = 'half_day' | 'full_day' | 'overtime'
+
+function normalizeMinorWorkWorkerPeriodUi(p: string | undefined | null): MinorWorkWorkerPeriod {
+  if (p === 'half_day' || p === 'overtime') return p
+  return 'full_day'
+}
+
+const MINOR_WORK_PERIOD_LABEL: Record<MinorWorkWorkerPeriod, string> = {
+  half_day: '半天',
+  full_day: '整天',
+  overtime: '加班',
+}
+
+/** Ant Design Tag 预设色：半天 / 整天 / 加班区分 */
+const MINOR_WORK_PERIOD_TAG_COLOR: Record<MinorWorkWorkerPeriod, string> = {
+  half_day: 'gold',
+  full_day: 'blue',
+  overtime: 'volcano',
+}
+
+function minorWorkPeriodTagEl(period: string | undefined | null) {
+  const p = normalizeMinorWorkWorkerPeriodUi(period)
+  return (
+    <Tag bordered={false} color={MINOR_WORK_PERIOD_TAG_COLOR[p]} style={{ marginInlineEnd: 0 }}>
+      {MINOR_WORK_PERIOD_LABEL[p]}
+    </Tag>
+  )
+}
+
+type MinorWorkWorkerDayRow = {
+  /** 库表主键；仅 orders 列虚拟一行时为 0 */
+  id?: number
+  work_date: string
+  construction_workers: string[]
+  work_period?: MinorWorkWorkerPeriod
+}
+
 /** 与后端一致：任意状态可改基本信息；钉钉门禁下审批中不可编辑 */
 function canEditMinorWorkBasicInfo(r: MinorWorkOrder): boolean {
   return canEditMinorWorkWithAudit(r.audit)
@@ -212,6 +250,7 @@ const TRACK_KIND_LABEL: Record<string, string> = {
   track: '跟踪',
   assign: '分配任务',
   reassign: '转派',
+  close: '闭环',
 }
 
 type DispatchAttachmentDto = {
@@ -361,6 +400,55 @@ function drawerProgressPercent(n: number | null | undefined): number {
   return Math.min(100, Math.max(0, Math.round(Number(n))))
 }
 
+/** 列表排序：状态列先后（待派单 → … → 已闭环） */
+const MINOR_WORK_STATUS_SORT_ORDER: MinorWorkStatus[] = ['pending', 'dispatched', 'in_progress', 'closed']
+
+function minorWorkListCustomerSortKey(r: MinorWorkOrder): string {
+  return (sanitizeNullableText(r.customer_name) || sanitizeNullableText(r.applicant) || '').trim()
+}
+
+/** 升序比较：负值表示 a 在前 */
+function compareMinorWorkListRows(a: MinorWorkOrder, b: MinorWorkOrder, field: MinorWorkListColKey): number {
+  switch (field) {
+    case 'code':
+      return String(a.code ?? '').localeCompare(String(b.code ?? ''), 'zh-CN')
+    case 'title':
+      return String(a.title ?? '').localeCompare(String(b.title ?? ''), 'zh-CN')
+    case 'customer':
+      return minorWorkListCustomerSortKey(a).localeCompare(minorWorkListCustomerSortKey(b), 'zh-CN')
+    case 'due_at': {
+      const sa = String(a.due_at ?? '')
+      const sb = String(b.due_at ?? '')
+      if (!sa && !sb) return 0
+      if (!sa) return 1
+      if (!sb) return -1
+      return sa.localeCompare(sb)
+    }
+    case 'project_amount':
+      return (Number(a.project_amount) || 0) - (Number(b.project_amount) || 0)
+    case 'cost_budget':
+      return (Number(a.cost_budget) || 0) - (Number(b.cost_budget) || 0)
+    case 'progress':
+      return (Number(a.progress) || 0) - (Number(b.progress) || 0)
+    case 'status':
+      return MINOR_WORK_STATUS_SORT_ORDER.indexOf(a.status) - MINOR_WORK_STATUS_SORT_ORDER.indexOf(b.status)
+    case 'handler':
+      return String(a.handler ?? '').localeCompare(String(b.handler ?? ''), 'zh-CN')
+    case 'construction_workers': {
+      const sa = [...(a.construction_workers ?? [])].sort((x, y) => x.localeCompare(y, 'zh-CN')).join('\u0001')
+      const sb = [...(b.construction_workers ?? [])].sort((x, y) => x.localeCompare(y, 'zh-CN')).join('\u0001')
+      return sa.localeCompare(sb, 'zh-CN')
+    }
+    case 'audit': {
+      const la = minorWorkAuditLabel(a.audit)?.text ?? ''
+      const lb = minorWorkAuditLabel(b.audit)?.text ?? ''
+      return la.localeCompare(lb, 'zh-CN')
+    }
+    default:
+      return 0
+  }
+}
+
 function stepCurrent(status: MinorWorkStatus): number {
   if (status === 'pending') return 0
   if (status === 'dispatched' || status === 'in_progress') return 1
@@ -463,6 +551,21 @@ const MinorTrackAttachmentRow: React.FC<{
   )
 }
 
+/** 零星工程办理抽屉分区（与维护排单办理抽屉视觉一致） */
+const minorWorkDrawerSectionShell: React.CSSProperties = {
+  marginBottom: 22,
+  padding: 16,
+  borderRadius: 10,
+  background: 'var(--ant-color-fill-quaternary, rgba(0, 0, 0, 0.02))',
+  border: '1px solid var(--ant-color-border-secondary, #f0f0f0)',
+}
+
+const minorWorkDrawerSectionHeading: React.CSSProperties = {
+  marginBottom: 14,
+  paddingBottom: 10,
+  borderBottom: '1px solid var(--ant-color-border-secondary, #f0f0f0)',
+}
+
 const MaintenanceMinorWorkPage: React.FC = () => {
   const { message: msg } = App.useApp()
   const [list, setList] = useState<MinorWorkOrder[]>([])
@@ -489,9 +592,10 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   const [detailLoading, setDetailLoading] = useState(false)
   const [dispatchForm] = Form.useForm()
   const [assignDeptForm] = Form.useForm()
-  const [assignWorkersForm] = Form.useForm()
+  const [workerDayForm] = Form.useForm()
   const [assignDeptSubmitting, setAssignDeptSubmitting] = useState(false)
-  const [assignWorkersSubmitting, setAssignWorkersSubmitting] = useState(false)
+  const [workerDaySubmitting, setWorkerDaySubmitting] = useState(false)
+  const [workerDays, setWorkerDays] = useState<MinorWorkWorkerDayRow[]>([])
   const [confirmDispatchLoading, setConfirmDispatchLoading] = useState(false)
   const [trackForm] = Form.useForm()
   const [trackProgress, setTrackProgress] = useState(30)
@@ -509,6 +613,10 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   const [handlerInactiveRef, setHandlerInactiveRef] = useState<AssigneeInactiveRef[]>([])
   const [handlerUsersLoading, setHandlerUsersLoading] = useState(false)
   const [listColVisibility, setListColVisibility] = useState(loadMinorWorkListColVisibility)
+  const [listSort, setListSort] = useState<{
+    columnKey: MinorWorkListColKey
+    order: 'ascend' | 'descend'
+  } | null>(null)
 
   const handlerSelectOptions = useMemo(
     () => buildConstructionAssigneeOptions(handlerUserRows, handlerInactiveRef),
@@ -579,6 +687,29 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   }, [order?.handler, handlerDisplayMap])
 
   const constructionWorkersDisplay = useMemo(() => {
+    if (workerDays.length > 0) {
+      return (
+        <>
+          {workerDays.map((d, idx) => {
+            const names = (d.construction_workers ?? [])
+              .map((u) => sanitizeNullableText(u))
+              .filter((x): x is string => Boolean(x))
+              .map((u) => constructionWorkerDisplayMap.get(u) ?? handlerDisplayMap.get(u) ?? u)
+              .join('、')
+            return (
+              <React.Fragment
+                key={`${d.id ?? 0}-${d.work_date}-${normalizeMinorWorkWorkerPeriodUi(d.work_period)}-${idx}`}
+              >
+                {idx > 0 ? '； ' : null}
+                <span>
+                  {d.work_date}（{minorWorkPeriodTagEl(d.work_period)}）：{names || '（未指定）'}
+                </span>
+              </React.Fragment>
+            )
+          })}
+        </>
+      )
+    }
     const arr = order?.construction_workers ?? []
     if (!arr.length) return null
     const line = arr
@@ -587,7 +718,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       .map((u) => constructionWorkerDisplayMap.get(u) ?? handlerDisplayMap.get(u) ?? u)
       .join('、')
     return line || null
-  }, [order?.construction_workers, constructionWorkerDisplayMap, handlerDisplayMap])
+  }, [workerDays, order?.construction_workers, constructionWorkerDisplayMap, handlerDisplayMap])
 
   const closePreview = useCallback(() => {
     setPreviewBlob((b) => {
@@ -604,6 +735,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         params: keyword ? { keyword } : {},
       })
       setList(res.data.list ?? [])
+      setListSort(null)
     } catch (e: unknown) {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '加载失败')
     } finally {
@@ -645,12 +777,14 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         const res = await axios.get<{
           order: MinorWorkOrder
           tracks: MinorWorkTrack[]
+          worker_days?: MinorWorkWorkerDayRow[]
           dispatchAttachments?: DispatchAttachmentDto[]
           trackAttachments?: MinorWorkTrackAttachmentDto[]
           audit?: GateAudit
         }>(`/api/minor-works/${id}`)
         setOrder({ ...res.data.order, audit: res.data.audit })
         setTracks(res.data.tracks ?? [])
+        setWorkerDays(Array.isArray(res.data.worker_days) ? res.data.worker_days : [])
         setDispatchAttachments(res.data.dispatchAttachments ?? [])
         setTrackAttachments(res.data.trackAttachments ?? [])
         const o = res.data.order
@@ -658,8 +792,11 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         assignDeptForm.setFieldsValue({
           handler: o.handler?.trim() ? o.handler.trim() : undefined,
         })
-        assignWorkersForm.setFieldsValue({
-          construction_workers: Array.isArray(o.construction_workers) ? o.construction_workers : [],
+        workerDayForm.setFieldsValue({
+          work_date: dayjs(),
+          construction_workers: [],
+          work_period: 'full_day',
+          worker_day_id: undefined,
         })
         dispatchForm.setFieldsValue({
           plan_date: planDefault,
@@ -674,7 +811,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         setDetailLoading(false)
       }
     },
-    [assignDeptForm, assignWorkersForm, dispatchForm, msg, trackForm],
+    [assignDeptForm, workerDayForm, dispatchForm, msg, trackForm],
   )
 
   const trackAttachmentsByTrackId = useMemo(() => {
@@ -717,8 +854,8 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       const st = createRes.data?.audit?.audit_status
       msg.success(
         gate && st === 'draft'
-          ? '已创建。审批通过后请先指定部门负责人，即可填写派单信息；施工人员可在派单前后由负责人补全，闭环前须至少一人'
-          : '已创建。请先指定部门负责人，即可填写派单信息；施工人员可在派单前后由负责人补全，闭环前须至少一人',
+          ? '已创建。审批通过后请先指定部门负责人，即可填写派单信息；负责人可按日补全施工人员，闭环前须在至少一个施工日有人员'
+          : '已创建。请先指定部门负责人，即可填写派单信息；负责人可按日补全施工人员，闭环前须在至少一个施工日有人员',
       )
       setCreateOpen(false)
       createForm.resetFields()
@@ -774,6 +911,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       const res = await axios.post<{
         order: MinorWorkOrder
         tracks: MinorWorkTrack[]
+        worker_days?: MinorWorkWorkerDayRow[]
         dispatchAttachments?: DispatchAttachmentDto[]
       }>(`/api/minor-works/${detailId}/assign-handler`, {
         handler: v.handler,
@@ -781,12 +919,16 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       const no = res.data.order
       setOrder({ ...no, audit: no.audit })
       setTracks(res.data.tracks ?? [])
+      setWorkerDays(Array.isArray(res.data.worker_days) ? res.data.worker_days : [])
       setDispatchAttachments(res.data.dispatchAttachments ?? [])
       assignDeptForm.setFieldsValue({
         handler: no.handler?.trim() || undefined,
       })
-      assignWorkersForm.setFieldsValue({
-        construction_workers: Array.isArray(no.construction_workers) ? no.construction_workers : [],
+      workerDayForm.setFieldsValue({
+        work_date: dayjs(),
+        construction_workers: [],
+        work_period: 'full_day',
+        worker_day_id: undefined,
       })
       msg.success(
         order.status === 'pending'
@@ -806,38 +948,161 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     }
   }
 
-  const submitAssignWorkers = async () => {
+  const submitWorkerDaySave = async () => {
     if (!detailId || !order) return
     if (!minorWorkHasHandler(order)) {
       msg.warning('请先在「① 分配到部门」中指定部门负责人')
       return
     }
     try {
-      const v = await assignWorkersForm.validateFields(['construction_workers'])
-      setAssignWorkersSubmitting(true)
+      const v = await workerDayForm.validateFields(['work_date', 'work_period', 'construction_workers'])
+      setWorkerDaySubmitting(true)
+      const workDate = dayjs(v.work_date).format('YYYY-MM-DD')
+      const wid = v.worker_day_id
       const res = await axios.post<{
         order: MinorWorkOrder
         tracks: MinorWorkTrack[]
+        worker_days?: MinorWorkWorkerDayRow[]
         dispatchAttachments?: DispatchAttachmentDto[]
-      }>(`/api/minor-works/${detailId}/assign-handler`, {
+      }>(`/api/minor-works/${detailId}/worker-days`, {
+        work_date: workDate,
+        work_period: normalizeMinorWorkWorkerPeriodUi(v.work_period != null ? String(v.work_period) : 'full_day'),
         construction_workers: Array.isArray(v.construction_workers) ? v.construction_workers : [],
+        ...(typeof wid === 'number' && wid > 0 ? { worker_day_id: wid } : {}),
       })
       const no = res.data.order
       setOrder({ ...no, audit: no.audit })
       setTracks(res.data.tracks ?? [])
+      setWorkerDays(Array.isArray(res.data.worker_days) ? res.data.worker_days : [])
       setDispatchAttachments(res.data.dispatchAttachments ?? [])
-      assignWorkersForm.setFieldsValue({
-        construction_workers: Array.isArray(no.construction_workers) ? no.construction_workers : [],
+      workerDayForm.setFieldsValue({
+        work_date: dayjs(workDate),
+        construction_workers: [],
+        work_period: 'full_day',
+        worker_day_id: undefined,
       })
-      msg.success('已保存施工人员')
+      msg.success('已保存该日施工人员')
       fetchList()
     } catch (e: unknown) {
       if ((e as { errorFields?: unknown })?.errorFields) return
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '保存失败')
     } finally {
-      setAssignWorkersSubmitting(false)
+      setWorkerDaySubmitting(false)
     }
   }
+
+  const removeWorkerDay = useCallback(
+    async (row: MinorWorkWorkerDayRow) => {
+      if (!detailId || !order) return
+      if (!minorWorkHasHandler(order)) return
+      setWorkerDaySubmitting(true)
+      try {
+        const res = await axios.post<{
+          order: MinorWorkOrder
+          tracks: MinorWorkTrack[]
+          worker_days?: MinorWorkWorkerDayRow[]
+          dispatchAttachments?: DispatchAttachmentDto[]
+        }>(`/api/minor-works/${detailId}/worker-days`, {
+          work_date: row.work_date,
+          construction_workers: [],
+          ...(row.id != null && row.id > 0 ? { worker_day_id: row.id } : {}),
+        })
+        const no = res.data.order
+        setOrder({ ...no, audit: no.audit })
+        setTracks(res.data.tracks ?? [])
+        setWorkerDays(Array.isArray(res.data.worker_days) ? res.data.worker_days : [])
+        setDispatchAttachments(res.data.dispatchAttachments ?? [])
+        msg.success('已删除该条记录')
+        fetchList()
+      } catch (e: unknown) {
+        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '删除失败')
+      } finally {
+        setWorkerDaySubmitting(false)
+      }
+    },
+    [detailId, order, msg, fetchList],
+  )
+
+  const prepareNewWorkerDaySegment = useCallback(() => {
+    const cur = workerDayForm.getFieldValue('work_date') as Dayjs | undefined
+    workerDayForm.setFieldsValue({
+      work_date: cur ?? dayjs(),
+      construction_workers: [],
+      work_period: 'full_day',
+      worker_day_id: undefined,
+    })
+  }, [workerDayForm])
+
+  const fillWorkerDayForm = useCallback(
+    (d: MinorWorkWorkerDayRow) => {
+      workerDayForm.setFieldsValue({
+        work_date: dayjs(d.work_date),
+        work_period: normalizeMinorWorkWorkerPeriodUi(d.work_period),
+        construction_workers: Array.isArray(d.construction_workers) ? [...d.construction_workers] : [],
+        worker_day_id: d.id != null && d.id > 0 ? d.id : undefined,
+      })
+    },
+    [workerDayForm],
+  )
+
+  const workerDayListColumns = useMemo<ColumnsType<MinorWorkWorkerDayRow>>(
+    () => [
+      { title: '施工日期', dataIndex: 'work_date', key: 'work_date', width: 120 },
+      {
+        title: '工时',
+        key: 'period',
+        width: 100,
+        render: (_, r) => minorWorkPeriodTagEl(r.work_period),
+      },
+      {
+        title: '施工人员',
+        key: 'w',
+        render: (_, r) => {
+          const names = (r.construction_workers ?? []).map((u) => userRealNameOnlyMap.get(u) ?? u).join('、')
+          return names || '—'
+        },
+      },
+      {
+        title: '操作',
+        key: 'a',
+        width: 168,
+        render: (_, r) => (
+          <Space size="small">
+            <Button type="link" size="small" onClick={() => fillWorkerDayForm(r)}>
+              填入表单
+            </Button>
+            <Popconfirm title="确定删除该条施工记录？" onConfirm={() => void removeWorkerDay(r)}>
+              <Button type="link" size="small" danger disabled={workerDaySubmitting}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        ),
+      },
+    ],
+    [fillWorkerDayForm, removeWorkerDay, userRealNameOnlyMap, workerDaySubmitting],
+  )
+
+  const workerDayReadOnlyColumns = useMemo<ColumnsType<MinorWorkWorkerDayRow>>(
+    () => [
+      { title: '施工日期', dataIndex: 'work_date', key: 'work_date', width: 120 },
+      {
+        title: '工时',
+        key: 'period',
+        width: 100,
+        render: (_, r) => minorWorkPeriodTagEl(r.work_period),
+      },
+      {
+        title: '施工人员',
+        key: 'w',
+        render: (_, r) => {
+          const names = (r.construction_workers ?? []).map((u) => userRealNameOnlyMap.get(u) ?? u).join('、')
+          return names || '—'
+        },
+      },
+    ],
+    [userRealNameOnlyMap],
+  )
 
   const confirmDispatch = async () => {
     if (!detailId || !order) return
@@ -895,17 +1160,21 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   const submitClose = async () => {
     if (!detailId || !order) return
     if (!minorWorkHasConstructionWorkers(order)) {
-      msg.warning('闭环前须至少指定一名施工人员，请先在「② 分配施工人员」或「转派」中补全')
+      msg.warning('闭环前须至少在某一施工日指定人员，请先在「② 按日分派施工人员」或「转派 · 按日施工人员」中补全')
       return
     }
     setCloseLoading(true)
     try {
-      const res = await axios.post<MinorWorkOrder & { audit?: GateAudit }>(`/api/minor-works/${detailId}/close`, {
-        close_note: closeNote.trim() || null,
-        progress: 100,
-      })
-      const no = res.data
-      setOrder({ ...no, audit: no.audit })
+      const res = await axios.post<MinorWorkOrder & { audit?: GateAudit; tracks?: MinorWorkTrack[] }>(
+        `/api/minor-works/${detailId}/close`,
+        {
+          close_note: closeNote.trim() || null,
+          progress: 100,
+        },
+      )
+      const { tracks: nextTracks, ...orderRest } = res.data
+      setOrder({ ...orderRest, audit: orderRest.audit })
+      if (Array.isArray(nextTracks)) setTracks(nextTracks)
       setCloseOpen(false)
       setCloseNote('')
       msg.success('已闭环')
@@ -1217,7 +1486,13 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     }
   }, [])
 
-  const filtered = useMemo(() => list, [list])
+  const filtered = useMemo(() => {
+    if (!listSort) return list
+    const dir = listSort.order === 'ascend' ? 1 : -1
+    return [...list].sort(
+      (a, b) => dir * compareMinorWorkListRows(a, b, listSort.columnKey),
+    )
+  }, [list, listSort])
 
   const listTableScrollX = useMemo(() => {
     let w = 168
@@ -1228,6 +1503,14 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   }, [listColVisibility])
 
   const columns: ColumnsType<MinorWorkOrder> = useMemo(() => {
+    const withSort = (k: MinorWorkListColKey, col: ColumnType<MinorWorkOrder>): ColumnType<MinorWorkOrder> => ({
+      ...col,
+      key: k,
+      showSorterTooltip: { title: '点击切换升序 / 降序' },
+      sorter: (a: MinorWorkOrder, b: MinorWorkOrder) => compareMinorWorkListRows(a, b, k),
+      sortOrder: listSort?.columnKey === k ? listSort.order : undefined,
+    })
+
     const dataColsOrdered: { key: MinorWorkListColKey; col: ColumnType<MinorWorkOrder> }[] = [
       {
         key: 'code',
@@ -1327,7 +1610,6 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         key: 'audit',
         col: {
           title: '审批',
-          key: 'audit',
           width: MINOR_WORK_LIST_COL_WIDTH.audit,
           render: (_: unknown, r: MinorWorkOrder) => {
             const lab = minorWorkAuditLabel(r.audit)
@@ -1379,9 +1661,15 @@ const MaintenanceMinorWorkPage: React.FC = () => {
       ),
     }
 
-    return [...dataColsOrdered.filter((d) => listColVisibility[d.key]).map((d) => d.col), actionCol]
+    return [
+      ...dataColsOrdered
+        .filter((d) => listColVisibility[d.key])
+        .map((d) => withSort(d.key, d.col)),
+      actionCol,
+    ]
   }, [
     listColVisibility,
+    listSort,
     listNow,
     handlerDisplayMap,
     userRealNameOnlyMap,
@@ -1395,11 +1683,11 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     <Steps
       current={order ? stepCurrent(order.status) : 0}
       items={[
-        { title: '分配与派单', description: '指定部门负责人后即可填计划与说明；施工人员闭环前补全', icon: <FormOutlined /> },
+        { title: '分配与派单', description: '指定部门负责人后即可填计划与说明；施工人员按日补全', icon: <FormOutlined /> },
         { title: '部门负责人跟踪与说明', description: '过程记录与进度', icon: <SendOutlined /> },
         { title: '闭环', description: '完成确认', icon: <CheckCircleOutlined /> },
       ]}
-      style={{ marginBottom: 28 }}
+      style={{ marginBottom: 0 }}
     />
   )
 
@@ -1411,7 +1699,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
           零星工程
         </Title>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          ① 指定部门负责人后即可填写派单；② 施工人员可在派单前后补全，闭环前须至少一人。已派单后可转派。流程：① → 派单 → 跟踪 → 闭环
+          ① 指定部门负责人后即可填写派单；② 按日分派施工人员，闭环前须至少一日有人员。已派单后可转派。流程：① → 派单 → 跟踪 → 闭环
         </Text>
         <Search
           placeholder="搜索编号/标题/客户/内容/截止时间"
@@ -1457,6 +1745,21 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }}
         size="middle"
         scroll={{ x: listTableScrollX }}
+        sortDirections={['ascend', 'descend']}
+        onChange={(_pagination, _filters, sorter) => {
+          const s = Array.isArray(sorter) ? sorter[0] : sorter
+          const ck = s?.columnKey
+          const ord = s?.order
+          if (
+            typeof ck === 'string' &&
+            MINOR_WORK_LIST_COL_ORDER.includes(ck as MinorWorkListColKey) &&
+            (ord === 'ascend' || ord === 'descend')
+          ) {
+            setListSort({ columnKey: ck as MinorWorkListColKey, order: ord })
+          } else {
+            setListSort(null)
+          }
+        }}
       />
 
       <Modal
@@ -1657,44 +1960,54 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         }
       >
         <Spin spinning={detailLoading}>
-        {order && (
+          {order && (
           <>
-            {workflowSteps}
-            {order.audit?.dingtalk_gate && !minorWorkOpsUnlocked(order.audit) ? (
-              <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: 16 }}
-                message="已启用钉钉审批"
-                description="须审批通过后方可确认派单、上传派单图片、填写跟踪记录与闭环。请先完成 ① 指定部门负责人即可派单；② 施工人员闭环前须补全。请在列表或上方提交钉钉流程。"
-              />
-            ) : null}
-            {order.status === 'pending' && !minorWorkHasHandler(order) && canEditMinorWorkWithAudit(order.audit) ? (
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 16 }}
-                message="请先完成 ① 分配到部门"
-                description="在下方「① 分配到部门」选择部门负责人并保存后，即可填写计划、派单说明与上传附件并确认派单。建议在派单前后于「② 分配施工人员」中补全人员；闭环结项前须至少一名施工人员。"
-              />
-            ) : null}
-            {order.status !== 'pending' &&
-            order.status !== 'closed' &&
-            minorWorkOpsUnlocked(order.audit) &&
-            !minorWorkHasConstructionWorkers(order) ? (
-              <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: 16 }}
-                message="闭环前须补全施工人员"
-                description="请在下方「② 分配施工人员」或「转派 → 施工人员」中至少指定一人（须已绑定钉钉 userId 的在职用户）后，方可确认闭环。"
-              />
-            ) : null}
-            <Descriptions
+            <div style={{ marginBottom: 18 }}>{workflowSteps}</div>
+            <div style={{ marginBottom: 18 }}>
+              {order.audit?.dingtalk_gate && !minorWorkOpsUnlocked(order.audit) ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="已启用钉钉审批"
+                  description="须审批通过后方可确认派单、上传派单图片、填写跟踪记录与闭环。请先完成 ① 指定部门负责人即可派单；② 按日补全施工人员。请在列表或上方提交钉钉流程。"
+                />
+              ) : null}
+              {order.status === 'pending' && !minorWorkHasHandler(order) && canEditMinorWorkWithAudit(order.audit) ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="请先完成 ① 分配到部门"
+                  description="在下方「① 分配到部门」选择部门负责人并保存后，即可填写计划、派单说明与上传附件并确认派单。建议在派单前后于「② 按日分派施工人员」中补全；闭环结项前须在至少一个施工日有人员。"
+                />
+              ) : null}
+              {order.status !== 'pending' &&
+              order.status !== 'closed' &&
+              minorWorkOpsUnlocked(order.audit) &&
+              !minorWorkHasConstructionWorkers(order) ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="闭环前须按日补全施工人员"
+                  description="请在下方「② 按日分派施工人员」或「转派 · 按日施工人员」中至少为一个施工日指定人员（须已绑定钉钉 userId 的在职用户）后，方可确认闭环。"
+                />
+              ) : null}
+            </div>
+
+            <div style={minorWorkDrawerSectionShell}>
+              <div style={minorWorkDrawerSectionHeading}>
+                <Title level={5} style={{ margin: 0 }}>
+                  工程概况
+                </Title>
+                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                  状态、客户、金额、计划与事项内容等；施工人员（按日）为各施工日人员汇总展示。
+                </Text>
+              </div>
+              <Descriptions
               bordered
               size="middle"
               column={2}
-              style={{ marginBottom: 24 }}
+              style={{ marginBottom: 0 }}
               labelStyle={{
                 minWidth: 140,
                 width: 140,
@@ -1729,7 +2042,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
               <Descriptions.Item label="部门负责人">
                 {handlerDisplayLabel ?? <Text type="secondary">待分配</Text>}
               </Descriptions.Item>
-              <Descriptions.Item label="施工人员" span={2}>
+              <Descriptions.Item label="施工人员（按日）" span={2}>
                 {constructionWorkersDisplay ?? <Text type="secondary">待分配</Text>}
               </Descriptions.Item>
               <Descriptions.Item label="计划完成">{formatDueAtText(order.plan_date)}</Descriptions.Item>
@@ -1770,6 +2083,32 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                 </Descriptions.Item>
               ) : null}
             </Descriptions>
+            </div>
+
+            <div style={minorWorkDrawerSectionShell}>
+              <div style={minorWorkDrawerSectionHeading}>
+                <Title level={5} style={{ margin: 0 }}>
+                  办理
+                </Title>
+                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                  待派单：① 部门与按日人员 → ③ 确认派单；执行中：转派、按日人员与跟踪；闭环后仅只读。
+                </Text>
+              </div>
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            {order.status === 'closed' ? (
+              <Card size="small" title="施工人员（按日）" style={{ marginBottom: 0 }}>
+                <Table<MinorWorkWorkerDayRow>
+                  size="small"
+                  rowKey={(r) =>
+                    `${r.id ?? 0}-${r.work_date}-${normalizeMinorWorkWorkerPeriodUi(r.work_period)}`
+                  }
+                  dataSource={workerDays}
+                  columns={workerDayReadOnlyColumns}
+                  pagination={false}
+                  locale={{ emptyText: '无按日施工记录（详见上方汇总）' }}
+                />
+              </Card>
+            ) : null}
 
             {(order.status === 'dispatched' || order.status === 'in_progress') &&
             canEditMinorWorkWithAudit(order.audit) ? (
@@ -1777,7 +2116,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                 <Card
                   size="small"
                   title="转派 · 部门负责人"
-                  style={{ marginBottom: 16 }}
+                  style={{ marginBottom: 0 }}
                   extra={<Text type="secondary" style={{ fontSize: 12 }}>写入跟踪时间线</Text>}
                 >
                   <Form form={assignDeptForm} layout="vertical" style={{ maxWidth: 420 }}>
@@ -1785,7 +2124,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                       name="handler"
                       label="部门负责人"
                       rules={[{ required: true, message: '请选择部门负责人' }]}
-                      extra="将任务分配到部门，由该负责人在下一步指定施工人员。"
+                      extra="将任务分配到部门，由该负责人在下一步按日指定施工人员。"
                     >
                       <Select
                         showSearch
@@ -1800,27 +2139,69 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                     </Button>
                   </Form>
                 </Card>
-                <Card size="small" title="转派 · 施工人员" style={{ marginBottom: 24 }}>
-                  <Form form={assignWorkersForm} layout="vertical" style={{ maxWidth: 420 }}>
-                    <Form.Item
-                      name="construction_workers"
-                      label="施工人员"
-                      extra="由部门负责人指定；闭环前须至少一人。须已绑定钉钉的在职用户。"
-                    >
-                      <Select
-                        mode="multiple"
-                        allowClear
-                        showSearch
-                        optionFilterProp="label"
-                        placeholder="选择施工人员"
-                        options={constructionWorkerSelectOptions}
-                        loading={handlerUsersLoading}
+                <Card size="small" title="转派 · 按日施工人员" style={{ marginBottom: 0 }}>
+                  {!minorWorkHasHandler(order) ? (
+                    <Text type="secondary">请先在「转派 · 部门负责人」中指定部门负责人。</Text>
+                  ) : (
+                    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                      <Table<MinorWorkWorkerDayRow>
+                        size="small"
+                        rowKey={(r) =>
+                          `${r.id ?? 0}-${r.work_date}-${normalizeMinorWorkWorkerPeriodUi(r.work_period)}`
+                        }
+                        dataSource={workerDays}
+                        columns={workerDayListColumns}
+                        pagination={false}
+                        locale={{ emptyText: '尚无按日记录，请在下方选择日期并添加人员' }}
                       />
-                    </Form.Item>
-                    <Button type="primary" loading={assignWorkersSubmitting} onClick={() => void submitAssignWorkers()}>
-                      保存施工人员
-                    </Button>
-                  </Form>
+                      <Form form={workerDayForm} layout="vertical" style={{ maxWidth: 480 }}>
+                        <Form.Item name="worker_day_id" hidden>
+                          <Input type="hidden" />
+                        </Form.Item>
+                        <Form.Item
+                          name="work_date"
+                          label="施工日期"
+                          rules={[{ required: true, message: '请选择施工日期' }]}
+                          extra="按自然日分派。该日在库里已有记录时，不带已选条目保存会新增一条（不同人、不同时长均可）；要改已有条目请先在表格点「填入表单」再保存。"
+                        >
+                          <DatePicker format="YYYY-MM-DD" style={{ width: '100%' }} />
+                        </Form.Item>
+                        <Form.Item
+                          name="work_period"
+                          label="工时类型"
+                          rules={[{ required: true, message: '请选择工时类型' }]}
+                          extra="半天、整天或加班，与该日施工人员一并保存。"
+                        >
+                          <Radio.Group>
+                            <Radio value="half_day">半天</Radio>
+                            <Radio value="full_day">整天</Radio>
+                            <Radio value="overtime">加班</Radio>
+                          </Radio.Group>
+                        </Form.Item>
+                        <Form.Item
+                          name="construction_workers"
+                          label="施工人员"
+                          extra="须已绑定钉钉 userId。闭环前须在至少一个施工日指定人员（各日并集校验）。"
+                        >
+                          <Select
+                            mode="multiple"
+                            allowClear
+                            showSearch
+                            optionFilterProp="label"
+                            placeholder="选择施工人员"
+                            options={constructionWorkerSelectOptions}
+                            loading={handlerUsersLoading}
+                          />
+                        </Form.Item>
+                        <Space wrap>
+                          <Button type="primary" loading={workerDaySubmitting} onClick={() => void submitWorkerDaySave()}>
+                            保存该日施工人员
+                          </Button>
+                          <Button onClick={() => prepareNewWorkerDaySegment()}>基于所选日期新增一条</Button>
+                        </Space>
+                      </Form>
+                    </Space>
+                  )}
                 </Card>
               </>
             ) : null}
@@ -1830,7 +2211,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                 <Card
                   size="small"
                   title="① 分配到部门（部门负责人）"
-                  style={{ marginBottom: 16 }}
+                  style={{ marginBottom: 0 }}
                   extra={
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       须先完成本步，方可填写下方派单
@@ -1857,41 +2238,75 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                     </Button>
                   </Form>
                 </Card>
-                <Card size="small" title="② 部门负责人分配施工人员" style={{ marginBottom: 24 }}>
+                <Card size="small" title="② 部门负责人按日分派施工人员" style={{ marginBottom: 0 }}>
                   {!minorWorkHasHandler(order) ? (
                     <Text type="secondary">请先完成上方「① 分配到部门」并保存。</Text>
                   ) : (
-                    <Form form={assignWorkersForm} layout="vertical" style={{ maxWidth: 420 }}>
-                      <Form.Item
-                        name="construction_workers"
-                        label="施工人员"
-                        extra="由部门负责人指定；闭环前须至少一人。须已绑定钉钉 userId 的在职用户。"
-                      >
-                        <Select
-                          mode="multiple"
-                          allowClear
-                          showSearch
-                          optionFilterProp="label"
-                          placeholder="选择施工人员"
-                          options={constructionWorkerSelectOptions}
-                          loading={handlerUsersLoading}
-                        />
-                      </Form.Item>
-                      <Button
-                        type="primary"
-                        loading={assignWorkersSubmitting}
-                        onClick={() => void submitAssignWorkers()}
-                      >
-                        保存施工人员
-                      </Button>
-                    </Form>
+                    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                      <Table<MinorWorkWorkerDayRow>
+                        size="small"
+                        rowKey={(r) =>
+                          `${r.id ?? 0}-${r.work_date}-${normalizeMinorWorkWorkerPeriodUi(r.work_period)}`
+                        }
+                        dataSource={workerDays}
+                        columns={workerDayListColumns}
+                        pagination={false}
+                        locale={{ emptyText: '尚无按日记录，请在下方选择日期并添加人员' }}
+                      />
+                      <Form form={workerDayForm} layout="vertical" style={{ maxWidth: 480 }}>
+                        <Form.Item name="worker_day_id" hidden>
+                          <Input type="hidden" />
+                        </Form.Item>
+                        <Form.Item
+                          name="work_date"
+                          label="施工日期"
+                          rules={[{ required: true, message: '请选择施工日期' }]}
+                          extra="按自然日分派。该日在库里已有记录时，不带已选条目保存会新增一条（不同人、不同时长均可）；要改已有条目请先在表格点「填入表单」再保存。也可用「基于所选日期新增一条」清空后追加。"
+                        >
+                          <DatePicker format="YYYY-MM-DD" style={{ width: '100%' }} />
+                        </Form.Item>
+                        <Form.Item
+                          name="work_period"
+                          label="工时类型"
+                          rules={[{ required: true, message: '请选择工时类型' }]}
+                          extra="半天、整天或加班，与该日施工人员一并保存。"
+                        >
+                          <Radio.Group>
+                            <Radio value="half_day">半天</Radio>
+                            <Radio value="full_day">整天</Radio>
+                            <Radio value="overtime">加班</Radio>
+                          </Radio.Group>
+                        </Form.Item>
+                        <Form.Item
+                          name="construction_workers"
+                          label="施工人员"
+                          extra="须已绑定钉钉 userId。闭环前须在至少一个施工日指定人员。"
+                        >
+                          <Select
+                            mode="multiple"
+                            allowClear
+                            showSearch
+                            optionFilterProp="label"
+                            placeholder="选择施工人员"
+                            options={constructionWorkerSelectOptions}
+                            loading={handlerUsersLoading}
+                          />
+                        </Form.Item>
+                        <Space wrap>
+                          <Button type="primary" loading={workerDaySubmitting} onClick={() => void submitWorkerDaySave()}>
+                            保存该日施工人员
+                          </Button>
+                          <Button onClick={() => prepareNewWorkerDaySegment()}>基于所选日期新增一条</Button>
+                        </Space>
+                      </Form>
+                    </Space>
                   )}
                 </Card>
               </>
             ) : null}
 
             {order.status === 'pending' && (
-              <Card title="③ 确认派单" style={{ marginBottom: 24 }}>
+              <Card title="③ 确认派单" style={{ marginBottom: 0 }}>
                 <Form form={dispatchForm} layout="vertical">
                   <Form.Item
                     name="plan_date"
@@ -1977,15 +2392,21 @@ const MaintenanceMinorWorkPage: React.FC = () => {
             )}
 
             {order.status !== 'pending' && (
-              <Card title="④ 部门负责人跟踪与说明" style={{ marginBottom: 24 }}>
+              <Card title="④ 部门负责人跟踪与说明" style={{ marginBottom: 0 }}>
                 {tracks.length === 0 ? (
                   <Text type="secondary">暂无跟踪记录，请填写下方说明并保存。</Text>
                 ) : (
-                  <Timeline style={{ marginBottom: 20 }}>
+                  <Timeline style={{ marginBottom: 16 }}>
                     {tracks.map((t) => {
                       const tk = t.track_kind || 'track'
                       const lineColor =
-                        tk === 'assign' ? 'green' : tk === 'reassign' ? 'cyan' : 'blue'
+                        tk === 'close'
+                          ? 'green'
+                          : tk === 'assign'
+                            ? 'green'
+                            : tk === 'reassign'
+                              ? 'cyan'
+                              : 'blue'
                       const kindLabel = TRACK_KIND_LABEL[tk] ?? '跟踪'
                       const tAtts = trackAttachmentsByTrackId[t.id] ?? []
                       const by = sanitizeNullableText(t.created_by)
@@ -2064,12 +2485,14 @@ const MaintenanceMinorWorkPage: React.FC = () => {
             )}
 
             {order.status === 'closed' && (
-              <Card title="闭环">
+              <Card title="闭环" style={{ marginBottom: 0 }}>
                 <Text>本单已于 {formatDueAtText(order.finish_date)} 闭环。</Text>
               </Card>
             )}
+              </Space>
+            </div>
           </>
-        )}
+          )}
         </Spin>
       </Drawer>
 
@@ -2082,7 +2505,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
         okText="确认闭环"
       >
         <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-          闭环后进度将记为 100%，并记录完成日期。可填写总结说明。须已指定至少一名施工人员。
+          闭环后进度将记为 100%，并记录完成日期。可填写总结说明。须在至少一个施工日已指定施工人员。
         </Text>
         <TextArea rows={4} value={closeNote} onChange={(e) => setCloseNote(e.target.value)} placeholder="闭环说明（可选）" />
       </Modal>

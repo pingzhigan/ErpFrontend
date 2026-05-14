@@ -1,6 +1,7 @@
 /**
  * 研发富文本 HTML 编辑器（TipTap）：标题 Enter/Tab 大纲键、加粗/对齐/链接/图、文字色与高亮、分割线等；支持粘贴 / 拖入 / 工具栏插入图片。
  * 未传 uploadImage 时：压缩后以 data URL 写入；传入 uploadImage 时：走服务端落盘，正文中为图片 URL。
+ * 正文在保存/预览侧经 sanitizeRdRichBodyHtml 清洗；编辑态 onChange 使用 TipTap 原始 HTML，避免清洗与编辑器不同步导致图片或样式丢失。
  */
 import {
   AlignCenterOutlined,
@@ -34,80 +35,14 @@ import { TextStyleKit } from '@tiptap/extension-text-style'
 import Underline from '@tiptap/extension-underline'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import type { MenuProps } from 'antd'
-import { App, Button, ColorPicker, Divider, Dropdown, InputNumber, Popover, Select, Space, Tooltip, theme } from 'antd'
-import DOMPurify from 'dompurify'
+import type { InputRef, MenuProps } from 'antd'
+import { App, Button, ColorPicker, Divider, Dropdown, Input, InputNumber, Modal, Popover, Select, Space, Tooltip, Typography, theme } from 'antd'
 import React, { forwardRef, useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { RD_RICH_MAX_DATA_URL_CHARS, sanitizeRdRichBodyHtml, sanitizeRichTextLinkHref } from '../utils/rdRichHtmlSanitize'
 import { appendAccessTokenToSinglePreviewUrl } from '../utils/rdRichPreviewAuthUrls'
 import { RdHeadingOutlineKeys } from './RdHeadingOutlineKeys'
 
-/** 单张粘贴图 data URL 长度上限（约对应 ~800KB 原图经压缩后） */
-const MAX_DATA_URL_CHARS = 1_100_000
-
-let domPurifyDataImageHookRegistered = false
-function ensureDomPurifyDataImageHook(): void {
-  if (domPurifyDataImageHookRegistered) return
-  domPurifyDataImageHookRegistered = true
-  DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
-    if (node.nodeName !== 'IMG' || data.attrName !== 'src') return
-    const v = data.attrValue
-    if (typeof v !== 'string') return
-    if (v.startsWith('data:image/') || v.startsWith('/api/rd/richtext-body-images/')) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(data as any).forceKeepAttr = true
-    }
-  })
-}
-
-/** 允许 TipTap 文字色 / 高亮（span、mark 上的安全 style 与 mark 的 data-color） */
-let domPurifyRdRichStyleHookRegistered = false
-function ensureDomPurifyRdRichStyleHook(): void {
-  if (domPurifyRdRichStyleHookRegistered) return
-  domPurifyRdRichStyleHookRegistered = true
-  DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
-    if (data.attrName === 'data-color' && node.nodeName === 'MARK') {
-      const v = String(data.attrValue ?? '').trim()
-      if (v.length > 0 && v.length < 80 && /^[\w#%,().\s+-]+$/.test(v)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ;(data as any).forceKeepAttr = true
-      }
-      return
-    }
-    if (data.attrName !== 'style') return
-    const tag = node.nodeName
-    if (tag !== 'SPAN' && tag !== 'MARK' && tag !== 'H1' && tag !== 'H2' && tag !== 'H3' && tag !== 'P') return
-    const raw = String(data.attrValue ?? '').trim()
-    if (raw.length === 0 || raw.length > 500) return
-    const parts = raw
-      .split(';')
-      .map((s) => s.trim())
-      .filter(Boolean)
-    const safePart = (p: string): boolean => {
-      const m = /^([\w-]+)\s*:\s*(.+)$/i.exec(p)
-      if (!m) return false
-      const key = m[1].toLowerCase()
-      const val = m[2].trim()
-      if (val.length > 120) return false
-      if (key === 'color') {
-        return val === 'inherit' || /^[\w#%,().\s+-]+$/.test(val)
-      }
-      if (key === 'background-color') {
-        return /^[\w#%,().\s+-]+$/.test(val)
-      }
-      if (key === 'font-size') {
-        return /^\d+(\.\d+)?(px|pt|em|rem|%)$/.test(val)
-      }
-      if (key === 'text-align' && (tag === 'H1' || tag === 'H2' || tag === 'H3' || tag === 'P')) {
-        return /^(left|right|center|justify)$/.test(val)
-      }
-      return false
-    }
-    if (parts.length >= 1 && parts.every(safePart)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(data as any).forceKeepAttr = true
-    }
-  })
-}
+export { sanitizeRdRichBodyHtml, sanitizeRdRichPreviewHtml, sanitizeRichTextLinkHref } from '../utils/rdRichHtmlSanitize'
 
 const FONT_COLOR_PRESETS = [
   '#000000',
@@ -126,12 +61,6 @@ const FONT_COLOR_PRESETS = [
 
 const HIGHLIGHT_PRESETS = ['#fff566', '#d9f7be', '#bae7ff', '#ffccc7', '#ffd8bf', '#e6f4ff', '#f9f0ff', '#fff1b8']
 
-export function sanitizeRdRichPreviewHtml(html: string): string {
-  ensureDomPurifyDataImageHook()
-  ensureDomPurifyRdRichStyleHook()
-  return DOMPurify.sanitize(html || '', { USE_PROFILES: { html: true } })
-}
-
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader()
@@ -147,7 +76,7 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
   }
   if (file.type === 'image/gif') {
     const raw = await readFileAsDataUrl(file)
-    if (raw.length <= MAX_DATA_URL_CHARS) return raw
+    if (raw.length <= RD_RICH_MAX_DATA_URL_CHARS) return raw
     throw new Error('GIF 动图过大，请换用较小的静态图或另存为 PNG/JPEG')
   }
   try {
@@ -170,17 +99,17 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
     bmp.close()
     let q = 0.88
     let dataUrl = canvas.toDataURL('image/jpeg', q)
-    while (dataUrl.length > MAX_DATA_URL_CHARS && q > 0.42) {
+    while (dataUrl.length > RD_RICH_MAX_DATA_URL_CHARS && q > 0.42) {
       q -= 0.08
       dataUrl = canvas.toDataURL('image/jpeg', q)
     }
-    if (dataUrl.length > MAX_DATA_URL_CHARS) {
+    if (dataUrl.length > RD_RICH_MAX_DATA_URL_CHARS) {
       throw new Error('图片仍过大，请选择更小的图片')
     }
     return dataUrl
   } catch {
     const raw = await readFileAsDataUrl(file)
-    if (raw.length > MAX_DATA_URL_CHARS) {
+    if (raw.length > RD_RICH_MAX_DATA_URL_CHARS) {
       throw new Error('图片过大，请换用较小的图片')
     }
     return raw
@@ -309,6 +238,37 @@ function RdTiptapMenuBar({
   const [fontSizeOpen, setFontSizeOpen] = useState(false)
   const [customSizeNum, setCustomSizeNum] = useState<number | null>(16)
   const [customSizeUnit, setCustomSizeUnit] = useState<'px' | 'pt'>('px')
+  const [linkModalOpen, setLinkModalOpen] = useState(false)
+  const [linkDraft, setLinkDraft] = useState('')
+  const linkInputRef = useRef<InputRef>(null)
+
+  const openLinkModal = useCallback(() => {
+    if (!editor) return
+    const prev = editor.getAttributes('link').href as string | undefined
+    setLinkDraft(prev?.trim() ? prev : 'https://')
+    setLinkModalOpen(true)
+  }, [editor])
+
+  const closeLinkModal = useCallback(() => {
+    setLinkModalOpen(false)
+  }, [])
+
+  const submitLinkModal = useCallback(() => {
+    if (!editor) return
+    const result = sanitizeRichTextLinkHref(linkDraft)
+    if (!result.ok) {
+      msg.error(result.message)
+      return
+    }
+    editor.chain().focus().extendMarkRange('link').setLink({ href: result.href }).run()
+    setLinkModalOpen(false)
+  }, [editor, linkDraft, msg])
+
+  const removeLinkFromModal = useCallback(() => {
+    if (!editor) return
+    editor.chain().focus().extendMarkRange('link').unsetLink().run()
+    setLinkModalOpen(false)
+  }, [editor])
 
   const headingMenu: MenuProps['items'] = useMemo(() => {
     if (!editor) return []
@@ -393,8 +353,9 @@ function RdTiptapMenuBar({
   }
 
   return (
-    <div className="rd-tiptap-menubar">
-      <Space size={2} wrap align="center">
+    <>
+      <div className="rd-tiptap-menubar">
+        <Space size={2} wrap align="center">
         <TbIconBtn title="撤销" disabled={!editor.can().undo()} icon={<UndoOutlined />} onClick={() => editor.chain().focus().undo().run()} />
         <TbIconBtn title="重做" disabled={!editor.can().redo()} icon={<RedoOutlined />} onClick={() => editor.chain().focus().redo().run()} />
         <Divider type="vertical" className="rd-tiptap-toolbar-divider" />
@@ -575,41 +536,67 @@ function RdTiptapMenuBar({
           title="左对齐"
           active={editor.isActive({ textAlign: 'left' })}
           icon={<AlignLeftOutlined />}
-          onClick={() => editor.chain().focus().setTextAlign('left').run()}
+          onClick={() => editor.chain().focus().toggleTextAlign('left').run()}
         />
         <TbIconBtn
           title="居中"
           active={editor.isActive({ textAlign: 'center' })}
           icon={<AlignCenterOutlined />}
-          onClick={() => editor.chain().focus().setTextAlign('center').run()}
+          onClick={() => editor.chain().focus().toggleTextAlign('center').run()}
         />
         <TbIconBtn
           title="右对齐"
           active={editor.isActive({ textAlign: 'right' })}
           icon={<AlignRightOutlined />}
-          onClick={() => editor.chain().focus().setTextAlign('right').run()}
+          onClick={() => editor.chain().focus().toggleTextAlign('right').run()}
         />
         <TbIconBtn title="分割线" icon={<LineOutlined />} onClick={() => editor.chain().focus().setHorizontalRule().run()} />
         <Divider type="vertical" className="rd-tiptap-toolbar-divider" />
-        <TbIconBtn
-          title="链接"
-          active={linkActive}
-          icon={<LinkOutlined />}
-          onClick={() => {
-            const prev = editor.getAttributes('link').href as string | undefined
-            const url = window.prompt('链接地址（留空则移除链接）', prev || 'https://')
-            if (url === null) return
-            const t = url.trim()
-            if (t === '') {
-              editor.chain().focus().extendMarkRange('link').unsetLink().run()
-              return
-            }
-            editor.chain().focus().extendMarkRange('link').setLink({ href: t }).run()
-          }}
-        />
+        <TbIconBtn title="链接" active={linkActive} icon={<LinkOutlined />} onClick={openLinkModal} />
         <TbIconBtn title="插入图片" icon={<PictureOutlined />} onClick={onInsertImagePick} />
-      </Space>
-    </div>
+        </Space>
+      </div>
+      <Modal
+        title="链接"
+        open={linkModalOpen}
+        onCancel={closeLinkModal}
+        destroyOnHidden
+        width={480}
+        afterOpenChange={(open) => {
+          if (!open) return
+          requestAnimationFrame(() => {
+            const el = linkInputRef.current?.input
+            el?.focus({ preventScroll: true })
+            el?.select()
+          })
+        }}
+        footer={
+          <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+            {linkActive ? (
+              <Button danger type="text" onClick={removeLinkFromModal}>
+                移除链接
+              </Button>
+            ) : null}
+            <Button onClick={closeLinkModal}>取消</Button>
+            <Button type="primary" onClick={submitLinkModal}>
+              确定
+            </Button>
+          </Space>
+        }
+      >
+        <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 10 }}>
+          仅允许 http(s)、mailto: 或以 / 开头的站内路径；禁止 javascript、data、file 等协议。提交前会再次校验。
+        </Typography.Text>
+        <Input
+          ref={linkInputRef}
+          value={linkDraft}
+          onChange={(e) => setLinkDraft(e.target.value)}
+          placeholder="https://example.com 或 /api/… 或 mailto:a@b.com"
+          allowClear
+          onPressEnter={submitLinkModal}
+        />
+      </Modal>
+    </>
   )
 }
 
@@ -658,7 +645,7 @@ export const RdRichHtmlEditor = forwardRef<RdRichHtmlEditorRef, RdRichHtmlEditor
       immediatelyRender: false,
       shouldRerenderOnTransaction: true,
       extensions,
-      content: html || '<p></p>',
+      content: sanitizeRdRichBodyHtml(html || '<p></p>'),
       onUpdate: ({ editor: ed }) => {
         onChange(ed.getHTML())
       },
@@ -702,8 +689,8 @@ export const RdRichHtmlEditor = forwardRef<RdRichHtmlEditorRef, RdRichHtmlEditor
     () => ({
       getHtml: () => {
         const ed = editorRef.current
-        if (ed && !ed.isDestroyed) return ed.getHTML()
-        return html
+        if (ed && !ed.isDestroyed) return sanitizeRdRichBodyHtml(ed.getHTML())
+        return sanitizeRdRichBodyHtml(html)
       },
     }),
     [html],
