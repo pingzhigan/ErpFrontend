@@ -141,7 +141,7 @@ const appRoutes: AppRouteItem[] = [
     path: '/personnel-presence',
     name: '人员在岗状态',
     icon: <TeamOutlined />,
-    permission: 'maintenance',
+    permission: 'personnel-presence',
   },
   { key: 'divider-1', name: '', divider: true },
   {
@@ -1712,7 +1712,7 @@ const LayoutWithMenu: React.FC = () => {
           <Route
             path="/personnel-presence"
             element={
-              <RequireAuth permissions={['maintenance']}>
+              <RequireAuth permissions={['personnel-presence']}>
                 <PersonnelPresencePage />
               </RequireAuth>
             }

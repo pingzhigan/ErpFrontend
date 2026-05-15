@@ -54,7 +54,7 @@ import {
 } from '../utils/constructionAssigneeOptions'
 import { compressImageFilesForUpload, compressImageForUpload } from '../utils/compressImageForUpload'
 
-const { Title, Text } = Typography
+const { Title, Text, Paragraph } = Typography
 
 export type RdResearchTodoRow = {
   id: number
@@ -907,9 +907,9 @@ const RdResearchTodosPage: React.FC = () => {
         </div>
         <div className="rd-todo-row__col rd-todo-row__col--content">
           {contentRaw ? (
-            <Text type="secondary" className="rd-todo-row__excerpt" ellipsis={{ rows: 2, tooltip: true }}>
+            <Paragraph type="secondary" className="rd-todo-row__excerpt" ellipsis={{ rows: 2, tooltip: true }}>
               {contentRaw}
-            </Text>
+            </Paragraph>
           ) : (
             <Text type="secondary" className="rd-todo-row__excerpt rd-todo-row__excerpt--muted" ellipsis>
               无具体内容
@@ -947,7 +947,7 @@ const RdResearchTodosPage: React.FC = () => {
         </div>
         <div className="rd-todo-row__col rd-todo-row__col--notes">
           {notesPlain ? (
-            <Text type="secondary" className="rd-todo-row__excerpt" ellipsis={{ rows: 1, tooltip: true }}>
+            <Text type="secondary" className="rd-todo-row__excerpt" ellipsis={{ tooltip: true }}>
               {notesPlain}
             </Text>
           ) : (

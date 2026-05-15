@@ -1258,16 +1258,6 @@ const MaintenanceSchedulePage: React.FC = () => {
     [detailId, task, msg, fetchList],
   )
 
-  const prepareNewWorkerDaySegment = useCallback(() => {
-    const cur = workerDayForm.getFieldValue('work_date') as Dayjs | undefined
-    workerDayForm.setFieldsValue({
-      work_date: cur ?? dayjs(),
-      construction_workers: [],
-      work_period: 'full_day',
-      worker_day_id: undefined,
-    })
-  }, [workerDayForm])
-
   const fillWorkerDayForm = useCallback(
     (d: MaintenanceTaskWorkerDayRow) => {
       workerDayForm.setFieldsValue({
@@ -2067,7 +2057,7 @@ const MaintenanceSchedulePage: React.FC = () => {
                               <Button type="primary" loading={workerDaySubmitting} onClick={() => void submitWorkerDaySave()}>
                                 保存该日施工人员
                               </Button>
-                              <Button onClick={() => prepareNewWorkerDaySegment()}>基于所选日期新增一条</Button>
+                              
                             </Space>
                           </Form>
                         </Space>

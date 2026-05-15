@@ -1023,16 +1023,6 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     [detailId, order, msg, fetchList],
   )
 
-  const prepareNewWorkerDaySegment = useCallback(() => {
-    const cur = workerDayForm.getFieldValue('work_date') as Dayjs | undefined
-    workerDayForm.setFieldsValue({
-      work_date: cur ?? dayjs(),
-      construction_workers: [],
-      work_period: 'full_day',
-      worker_day_id: undefined,
-    })
-  }, [workerDayForm])
-
   const fillWorkerDayForm = useCallback(
     (d: MinorWorkWorkerDayRow) => {
       workerDayForm.setFieldsValue({
@@ -2197,7 +2187,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                           <Button type="primary" loading={workerDaySubmitting} onClick={() => void submitWorkerDaySave()}>
                             保存该日施工人员
                           </Button>
-                          <Button onClick={() => prepareNewWorkerDaySegment()}>基于所选日期新增一条</Button>
+                         
                         </Space>
                       </Form>
                     </Space>
@@ -2261,7 +2251,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                           name="work_date"
                           label="施工日期"
                           rules={[{ required: true, message: '请选择施工日期' }]}
-                          extra="按自然日分派。该日在库里已有记录时，不带已选条目保存会新增一条（不同人、不同时长均可）；要改已有条目请先在表格点「填入表单」再保存。也可用「基于所选日期新增一条」清空后追加。"
+                          extra="按自然日分派。该日在库里已有记录时，不带已选条目保存会新增一条（不同人、不同时长均可）；要改已有条目请先在表格点「填入表单」再保存。"
                         >
                           <DatePicker format="YYYY-MM-DD" style={{ width: '100%' }} />
                         </Form.Item>
@@ -2296,7 +2286,7 @@ const MaintenanceMinorWorkPage: React.FC = () => {
                           <Button type="primary" loading={workerDaySubmitting} onClick={() => void submitWorkerDaySave()}>
                             保存该日施工人员
                           </Button>
-                          <Button onClick={() => prepareNewWorkerDaySegment()}>基于所选日期新增一条</Button>
+                  
                         </Space>
                       </Form>
                     </Space>
