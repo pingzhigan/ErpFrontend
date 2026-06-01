@@ -1,14 +1,17 @@
 /**
  * 功能名称：待办事项
- * 实现原理与逻辑：与「机会管理」平级；后端 opportunity_todos + 流程时间线；状态未派单/未处理/处理中/已完成；支持派单与转派并记入流程。
+ * 实现原理与逻辑：与「机会管理」平级；后端 opportunity_todos + 流程时间线；列表点击标题/详情打开抽屉办理（派单、转派、开始处理、完成、编辑、流程）。
  */
 import {
   CarryOutOutlined,
+  CheckCircleOutlined,
   DeleteOutlined,
   EditOutlined,
+  EyeOutlined,
   HistoryOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  RollbackOutlined,
   SendOutlined,
   ThunderboltOutlined,
   UserOutlined,
@@ -19,8 +22,9 @@ import {
   Avatar,
   Button,
   Card,
-  Checkbox,
   DatePicker,
+  Descriptions,
+  Divider,
   Drawer,
   Form,
   Input,
@@ -85,10 +89,13 @@ export type OpportunityTodoRow = {
   assignee_real_name: string | null
   assigned_at: string | null
   assigned_by: string | null
+  assigned_by_real_name: string | null
   created_at: string
   updated_at: string
   created_by: string | null
   updated_by: string | null
+  created_by_real_name: string | null
+  updated_by_real_name: string | null
 }
 
 export type OpportunityTodoFlowRow = {
@@ -98,6 +105,7 @@ export type OpportunityTodoFlowRow = {
   summary: string
   detail: string | null
   actor_username: string | null
+  actor_real_name: string | null
   from_status: string | null
   to_status: string | null
   meta_json: string | null
@@ -129,6 +137,28 @@ function statusLabel(code: string | null | undefined): string {
   return PROCESS_STATUS_LABEL[code] ?? code
 }
 
+function assignedByDisplayName(row: Pick<OpportunityTodoRow, 'assigned_by' | 'assigned_by_real_name'>): string | null {
+  const name = (row.assigned_by_real_name ?? '').trim()
+  if (name) return name
+  return null
+}
+
+function userRealNameDisplay(realName: string | null | undefined): string {
+  const name = (realName ?? '').trim()
+  return name || '—'
+}
+
+function formatUserAtTime(realName: string | null | undefined, at: string | null | undefined): string {
+  return `${userRealNameDisplay(realName)} · ${(at ?? '').trim() || '—'}`
+}
+
+function formatAssignedInfo(row: Pick<OpportunityTodoRow, 'assigned_at' | 'assigned_by' | 'assigned_by_real_name'>): string {
+  if (!row.assigned_at && !row.assigned_by) return '—'
+  const byName = assignedByDisplayName(row)
+  const parts = [row.assigned_at?.trim(), byName].filter(Boolean)
+  return parts.length > 0 ? parts.join(' · ') : '—'
+}
+
 const OpportunityTodosPage: React.FC = () => {
   const { message: msg } = App.useApp()
   const { token } = theme.useToken()
@@ -140,7 +170,7 @@ const OpportunityTodosPage: React.FC = () => {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
-  const [doneFilter, setDoneFilter] = useState<string>('0')
+  const [doneFilter, setDoneFilter] = useState<string>('')
   const [assigneeFilter, setAssigneeFilter] = useState<string>('')
   const [processFilter, setProcessFilter] = useState<string>('')
 
@@ -161,16 +191,13 @@ const OpportunityTodosPage: React.FC = () => {
     assignee_username?: string | null
   }>()
 
-  const [dispatchOpen, setDispatchOpen] = useState(false)
-  const [dispatchRow, setDispatchRow] = useState<OpportunityTodoRow | null>(null)
-  const pendingDispatchRowRef = useRef<OpportunityTodoRow | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailRow, setDetailRow] = useState<OpportunityTodoRow | null>(null)
+  const [detailFlowLoading, setDetailFlowLoading] = useState(false)
+  const [detailFlowList, setDetailFlowList] = useState<OpportunityTodoFlowRow[]>([])
+  const [detailDispatchMode, setDetailDispatchMode] = useState(false)
   const [dispatchForm] = Form.useForm<{ assignee_username: string }>()
   const [dispatchSubmitting, setDispatchSubmitting] = useState(false)
-
-  const [flowOpen, setFlowOpen] = useState(false)
-  const [flowLoading, setFlowLoading] = useState(false)
-  const [flowTodo, setFlowTodo] = useState<OpportunityTodoRow | null>(null)
-  const [flowList, setFlowList] = useState<OpportunityTodoFlowRow[]>([])
 
   const loadAssigneeOptions = useCallback(async () => {
     try {
@@ -224,6 +251,13 @@ const OpportunityTodosPage: React.FC = () => {
     void fetchList()
   }, [fetchList])
 
+  useEffect(() => {
+    setDetailRow((prev) => {
+      if (!prev) return prev
+      return list.find((r) => r.id === prev.id) ?? prev
+    })
+  }, [list])
+
   const openAdd = useCallback(() => {
     pendingEditRowRef.current = null
     setEditingId(null)
@@ -256,6 +290,44 @@ const OpportunityTodosPage: React.FC = () => {
     [form],
   )
 
+  const loadDetailFlow = useCallback(
+    async (todoId: number) => {
+      setDetailFlowLoading(true)
+      setDetailFlowList([])
+      try {
+        const res = await axios.get<{ list: OpportunityTodoFlowRow[] }>(`/api/opportunity-todos/${todoId}/flow`)
+        setDetailFlowList(res.data?.list ?? [])
+      } catch (e: unknown) {
+        msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '加载流程失败')
+      } finally {
+        setDetailFlowLoading(false)
+      }
+    },
+    [msg],
+  )
+
+  const openDetail = useCallback(
+    (row: OpportunityTodoRow) => {
+      setDetailRow(row)
+      setDetailDispatchMode(false)
+      setDetailOpen(true)
+      void loadDetailFlow(row.id)
+    },
+    [loadDetailFlow],
+  )
+
+  const closeDetail = useCallback(() => {
+    setDetailOpen(false)
+    setDetailRow(null)
+    setDetailFlowList([])
+    setDetailDispatchMode(false)
+    dispatchForm.resetFields()
+  }, [dispatchForm])
+
+  const patchDetailRow = useCallback((row: OpportunityTodoRow) => {
+    setDetailRow((prev) => (prev?.id === row.id ? row : prev))
+  }, [])
+
   const submitEdit = useCallback(async () => {
     try {
       const v = await form.validateFields()
@@ -269,7 +341,8 @@ const OpportunityTodosPage: React.FC = () => {
         await axios.post<OpportunityTodoRow>('/api/opportunity-todos', payload)
         msg.success('已添加')
       } else {
-        await axios.put<OpportunityTodoRow>(`/api/opportunity-todos/${editingId}`, payload)
+        const res = await axios.put<OpportunityTodoRow>(`/api/opportunity-todos/${editingId}`, payload)
+        patchDetailRow(res.data)
         msg.success('已保存')
       }
       setEditOpen(false)
@@ -279,130 +352,187 @@ const OpportunityTodosPage: React.FC = () => {
       if ((e as { errorFields?: unknown })?.errorFields) return
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '保存失败')
     }
-  }, [editingId, fetchList, form, msg])
+  }, [editingId, fetchList, form, msg, patchDetailRow])
 
   const toggleDone = useCallback(
     async (row: OpportunityTodoRow, done: boolean) => {
       try {
-        await axios.put<OpportunityTodoRow>(`/api/opportunity-todos/${row.id}`, { done })
+        const res = await axios.put<OpportunityTodoRow>(`/api/opportunity-todos/${row.id}`, { done })
+        patchDetailRow(res.data)
+        msg.success(done ? '已标记完成' : '已重新打开')
         void fetchList()
+        if (detailRow?.id === row.id) void loadDetailFlow(row.id)
       } catch (e: unknown) {
         msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '更新失败')
       }
     },
-    [fetchList, msg],
+    [detailRow?.id, fetchList, loadDetailFlow, msg, patchDetailRow],
   )
 
   const startProcessing = useCallback(
     async (row: OpportunityTodoRow) => {
       try {
-        await axios.post<OpportunityTodoRow>(`/api/opportunity-todos/${row.id}/start-processing`)
+        const res = await axios.post<OpportunityTodoRow>(`/api/opportunity-todos/${row.id}/start-processing`)
+        patchDetailRow(res.data)
         msg.success('已开始办理')
         void fetchList()
+        if (detailRow?.id === row.id) void loadDetailFlow(row.id)
       } catch (e: unknown) {
         msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '操作失败')
       }
     },
-    [fetchList, msg],
+    [detailRow?.id, fetchList, loadDetailFlow, msg, patchDetailRow],
   )
 
   const remove = useCallback(
-    async (id: number) => {
+    async (id: number, closeDetailAfter = false) => {
       try {
         await axios.delete(`/api/opportunity-todos/${id}`)
         msg.success('已删除')
+        if (closeDetailAfter) closeDetail()
         void fetchList()
       } catch (e: unknown) {
         msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '删除失败')
       }
     },
-    [fetchList, msg],
+    [closeDetail, fetchList, msg],
   )
 
-  const openDispatch = useCallback((row: OpportunityTodoRow) => {
-    pendingDispatchRowRef.current = row
-    setDispatchRow(row)
-    setDispatchOpen(true)
-  }, [])
-
-  const handleDispatchModalAfterOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) return
-      queueMicrotask(() => {
-        const row = pendingDispatchRowRef.current
-        if (row) {
-          dispatchForm.setFieldsValue({
-            assignee_username: row.assignee_username || undefined,
-          })
-        } else {
-          dispatchForm.resetFields()
-        }
-      })
-    },
-    [dispatchForm],
-  )
+  const openDetailDispatch = useCallback(() => {
+    if (!detailRow) return
+    setDetailDispatchMode(true)
+    dispatchForm.setFieldsValue({
+      assignee_username: detailRow.assignee_username || undefined,
+    })
+  }, [detailRow, dispatchForm])
 
   const submitDispatch = useCallback(async () => {
-    if (!dispatchRow) return
+    if (!detailRow) return
     try {
       const v = await dispatchForm.validateFields()
       setDispatchSubmitting(true)
-      await axios.post<OpportunityTodoRow>(`/api/opportunity-todos/${dispatchRow.id}/dispatch`, {
+      const res = await axios.post<OpportunityTodoRow>(`/api/opportunity-todos/${detailRow.id}/dispatch`, {
         assignee_username: v.assignee_username,
       })
-      msg.success(dispatchRow.assignee_username ? '转派成功' : '派单成功')
-      setDispatchOpen(false)
-      setDispatchRow(null)
+      msg.success(detailRow.assignee_username ? '转派成功' : '派单成功')
+      patchDetailRow(res.data)
+      setDetailDispatchMode(false)
+      dispatchForm.resetFields()
       void fetchList()
+      void loadDetailFlow(detailRow.id)
     } catch (e: unknown) {
       if ((e as { errorFields?: unknown })?.errorFields) return
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '操作失败')
     } finally {
       setDispatchSubmitting(false)
     }
-  }, [dispatchForm, dispatchRow, fetchList, msg])
+  }, [detailRow, dispatchForm, fetchList, loadDetailFlow, msg, patchDetailRow])
 
-  const openFlow = useCallback(async (row: OpportunityTodoRow) => {
-    setFlowTodo(row)
-    setFlowOpen(true)
-    setFlowLoading(true)
-    setFlowList([])
-    try {
-      const res = await axios.get<{ list: OpportunityTodoFlowRow[] }>(`/api/opportunity-todos/${row.id}/flow`)
-      setFlowList(res.data?.list ?? [])
-    } catch (e: unknown) {
-      msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '加载流程失败')
-    } finally {
-      setFlowLoading(false)
-    }
-  }, [msg])
-
-  const columns: ColumnsType<OpportunityTodoRow> = [
-    {
-      title: '完成',
-      width: 64,
-      render: (_, row) => (
-        <Checkbox checked={row.done} onChange={(e) => void toggleDone(row, e.target.checked)} />
-      ),
-    },
-    {
-      title: '状态',
-      width: 100,
-      render: (_, row) => {
-        const ps = row.process_status || 'unassigned'
+  const renderAssigneeBlock = useCallback(
+    (row: OpportunityTodoRow, compact = false, nameOnly = false) => {
+      if (!row.assignee_username && !(row.assignee_real_name ?? '').trim()) {
         return (
-          <Tag color={PROCESS_STATUS_TAG_COLOR[ps] ?? 'default'} style={{ fontWeight: 600, margin: 0 }}>
-            {PROCESS_STATUS_LABEL[ps] ?? ps}
+          <Tag
+            icon={<UserOutlined />}
+            color="default"
+            style={{
+              margin: 0,
+              padding: compact ? '4px 10px' : '6px 14px',
+              fontSize: compact ? 12 : 13,
+              fontWeight: 600,
+              borderStyle: 'dashed',
+              borderColor: token.colorWarningBorder,
+              color: token.colorWarning,
+              background: token.colorWarningBg,
+            }}
+          >
+            待派单
           </Tag>
         )
-      },
+      }
+      const displayName = nameOnly
+        ? userRealNameDisplay(row.assignee_real_name)
+        : (row.assignee_real_name ?? '').trim() || row.assignee_username
+      const sub =
+        !nameOnly && (row.assignee_real_name ?? '').trim() !== ''
+          ? row.assignee_username
+          : null
+      const assigneeKey = (row.assignee_username ?? '').trim() || (row.assignee_real_name ?? '').trim() || '?'
+      const avatarBg = ASSIGNEE_AVATAR_COLORS[hashUsername(assigneeKey) % ASSIGNEE_AVATAR_COLORS.length]
+      const avatarSize = compact ? 36 : 44
+      return (
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: compact ? 8 : 10,
+            padding: compact ? '4px 10px 4px 6px' : '6px 14px 6px 8px',
+            borderRadius: token.borderRadiusLG,
+            border: `2px solid ${token.colorPrimary}`,
+            background: `linear-gradient(135deg, ${token.colorPrimaryBg} 0%, ${token.colorFillAlter} 100%)`,
+            boxShadow: token.boxShadowSecondary,
+            maxWidth: '100%',
+          }}
+        >
+          <Avatar
+            size={avatarSize}
+            style={{
+              backgroundColor: avatarBg,
+              color: '#fff',
+              fontWeight: 700,
+              fontSize: compact ? 15 : 18,
+              flexShrink: 0,
+              border: `2px solid ${token.colorBgContainer}`,
+              boxShadow: token.boxShadowTertiary,
+            }}
+          >
+            {assigneeAvatarInitial(row.assignee_real_name, assigneeKey)}
+          </Avatar>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div
+              style={{
+                fontWeight: 700,
+                fontSize: compact ? 14 : 15,
+                lineHeight: 1.35,
+                color: token.colorTextHeading,
+                letterSpacing: '0.02em',
+              }}
+            >
+              {displayName}
+            </div>
+            {sub ? (
+              <Text type="secondary" ellipsis style={{ fontSize: 12, display: 'block', marginTop: 2 }}>
+                @{sub}
+              </Text>
+            ) : (
+              <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 2 }}>
+                经办人
+              </Text>
+            )}
+          </div>
+        </div>
+      )
     },
+    [token],
+  )
+
+  const columns: ColumnsType<OpportunityTodoRow> = [
     {
       title: '标题',
       dataIndex: 'title',
       ellipsis: true,
       render: (t: string, row) => (
-        <span style={{ textDecoration: row.done ? 'line-through' : undefined, opacity: row.done ? 0.65 : 1 }}>{t}</span>
+        <Button type="link" size="small" style={{ padding: 0, height: 'auto', maxWidth: '100%' }} onClick={() => openDetail(row)}>
+          <span
+            style={{
+              textDecoration: row.done ? 'line-through' : undefined,
+              opacity: row.done ? 0.65 : 1,
+              textAlign: 'left',
+            }}
+          >
+            {t}
+          </span>
+        </Button>
       ),
     },
     {
@@ -419,129 +549,36 @@ const OpportunityTodosPage: React.FC = () => {
         row.due_at ? <DueCountdownCell dueAt={row.due_at} now={now} /> : <span>—</span>,
     },
     {
-      title: '办理人',
-      width: 228,
+      title: '状态',
+      width: 100,
       render: (_, row) => {
-        if (!row.assignee_username) {
-          return (
-            <Tag
-              icon={<UserOutlined />}
-              color="default"
-              style={{
-                margin: 0,
-                padding: '6px 14px',
-                fontSize: 13,
-                fontWeight: 600,
-                borderStyle: 'dashed',
-                borderColor: token.colorWarningBorder,
-                color: token.colorWarning,
-                background: token.colorWarningBg,
-              }}
-            >
-              待派单
-            </Tag>
-          )
-        }
-        const displayName = (row.assignee_real_name ?? '').trim() || row.assignee_username
-        const sub =
-          (row.assignee_real_name ?? '').trim() !== ''
-            ? row.assignee_username
-            : null
-        const avatarBg = ASSIGNEE_AVATAR_COLORS[hashUsername(row.assignee_username) % ASSIGNEE_AVATAR_COLORS.length]
+        const ps = row.process_status || 'unassigned'
         return (
-          <div
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '6px 14px 6px 8px',
-              borderRadius: token.borderRadiusLG,
-              border: `2px solid ${token.colorPrimary}`,
-              background: `linear-gradient(135deg, ${token.colorPrimaryBg} 0%, ${token.colorFillAlter} 100%)`,
-              boxShadow: token.boxShadowSecondary,
-              maxWidth: '100%',
-            }}
-          >
-            <Avatar
-              size={44}
-              style={{
-                backgroundColor: avatarBg,
-                color: '#fff',
-                fontWeight: 700,
-                fontSize: 18,
-                flexShrink: 0,
-                border: `2px solid ${token.colorBgContainer}`,
-                boxShadow: token.boxShadowTertiary,
-              }}
-            >
-              {assigneeAvatarInitial(row.assignee_real_name, row.assignee_username)}
-            </Avatar>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div
-                style={{
-                  fontWeight: 700,
-                  fontSize: 15,
-                  lineHeight: 1.35,
-                  color: token.colorTextHeading,
-                  letterSpacing: '0.02em',
-                }}
-              >
-                {displayName}
-              </div>
-              {sub ? (
-                <Text type="secondary" ellipsis style={{ fontSize: 12, display: 'block', marginTop: 2 }}>
-                  @{sub}
-                </Text>
-              ) : (
-                <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 2 }}>
-                  经办人
-                </Text>
-              )}
-            </div>
-          </div>
+          <Tag color={PROCESS_STATUS_TAG_COLOR[ps] ?? 'default'} style={{ fontWeight: 600, margin: 0 }}>
+            {PROCESS_STATUS_LABEL[ps] ?? ps}
+          </Tag>
         )
       },
+    },
+    {
+      title: '办理人',
+      width: 228,
+      render: (_, row) => renderAssigneeBlock(row),
     },
     {
       title: '派单信息',
       width: 180,
       ellipsis: true,
-      render: (_, row) => {
-        if (!row.assigned_at && !row.assigned_by) return '—'
-        return (
-          <span style={{ fontSize: 12 }}>
-            {row.assigned_at ? `${row.assigned_at}` : ''}
-            {row.assigned_by ? ` · ${row.assigned_by}` : ''}
-          </span>
-        )
-      },
+      render: (_, row) => <span style={{ fontSize: 12 }}>{formatAssignedInfo(row)}</span>,
     },
     {
       title: '操作',
-      width: 280,
+      width: 88,
       fixed: 'right',
       render: (_, row) => (
-        <Space size={0} wrap>
-          <Button type="link" size="small" icon={<HistoryOutlined />} onClick={() => void openFlow(row)}>
-            流程
-          </Button>
-          {!row.done && row.process_status === 'pending' && row.assignee_username ? (
-            <Button type="link" size="small" icon={<PlayCircleOutlined />} onClick={() => void startProcessing(row)}>
-              开始处理
-            </Button>
-          ) : null}
-          <Button type="link" size="small" icon={<SendOutlined />} onClick={() => openDispatch(row)}>
-            {row.assignee_username ? '转派' : '派单'}
-          </Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
-            编辑
-          </Button>
-          <Popconfirm title="确定删除？" okText="删除" cancelText="取消" onConfirm={() => void remove(row.id)}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
+        <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openDetail(row)}>
+          详情
+        </Button>
       ),
     },
   ]
@@ -560,7 +597,7 @@ const OpportunityTodosPage: React.FC = () => {
               待办事项
             </Title>
             <Text type="secondary" className="header-desc" style={{ display: 'block' }}>
-              支持派单与转派（记入流程）；「未处理」下办理人可点「开始处理」进入处理中；完成勾选后状态为已完成。
+              点击标题或「详情」在抽屉中办理：派单、转派、开始处理、完成及查看流程记录。
             </Text>
           </div>
         </div>
@@ -645,7 +682,7 @@ const OpportunityTodosPage: React.FC = () => {
           loading={loading}
           columns={columns}
           dataSource={list}
-          scroll={{ x: 1380 }}
+          scroll={{ x: 1180 }}
           pagination={{
             current: page,
             pageSize,
@@ -701,97 +738,169 @@ const OpportunityTodosPage: React.FC = () => {
         </Form>
       </Modal>
 
-      <Modal
-        title={dispatchRow?.assignee_username ? '转派' : '办理派单'}
-        open={dispatchOpen}
-        afterOpenChange={handleDispatchModalAfterOpenChange}
-        onCancel={() => {
-          setDispatchOpen(false)
-          setDispatchRow(null)
-        }}
-        onOk={() => void submitDispatch()}
-        okText={dispatchRow?.assignee_username ? '确认转派' : '确认派单'}
-        confirmLoading={dispatchSubmitting}
-        destroyOnClose
-        width={440}
-      >
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 12, fontSize: 13 }}>
-          {dispatchRow?.assignee_username
-            ? '选择新的办理人；原办理人将解除，流程中会记录转派轨迹。'
-            : '选择在职系统用户作为办理人，事项进入「未处理」状态。'}
-        </Typography.Paragraph>
-        <Form form={dispatchForm} layout="vertical" preserve={false}>
-          <Form.Item
-            name="assignee_username"
-            label="办理人"
-            rules={[{ required: true, message: '请选择办理人' }]}
-          >
-            <Select showSearch optionFilterProp="label" placeholder="请选择" options={assigneeSelectOptions} />
-          </Form.Item>
-        </Form>
-      </Modal>
-
       <Drawer
         title={
-          flowTodo ? (
+          detailRow ? (
             <span>
-              处理流程 · {flowTodo.title}
-              <Tag style={{ marginLeft: 8 }} color={PROCESS_STATUS_TAG_COLOR[flowTodo.process_status] ?? 'default'}>
-                {PROCESS_STATUS_LABEL[flowTodo.process_status] ?? flowTodo.process_status}
+              待办详情 · {detailRow.title}
+              <Tag
+                style={{ marginLeft: 8 }}
+                color={PROCESS_STATUS_TAG_COLOR[detailRow.process_status] ?? 'default'}
+              >
+                {PROCESS_STATUS_LABEL[detailRow.process_status] ?? detailRow.process_status}
               </Tag>
             </span>
           ) : (
-            '处理流程'
+            '待办详情'
           )
         }
-        width={420}
-        open={flowOpen}
-        onClose={() => {
-          setFlowOpen(false)
-          setFlowTodo(null)
-          setFlowList([])
-        }}
+        placement="right"
+        width={Math.min(560, typeof window !== 'undefined' ? window.innerWidth - 24 : 560)}
+        open={detailOpen}
+        onClose={closeDetail}
         destroyOnClose
       >
-        <Spin spinning={flowLoading} tip="加载中…">
-          {!flowLoading && flowList.length === 0 ? (
-            <Text type="secondary">暂无流程记录</Text>
-          ) : null}
-          {!flowLoading && flowList.length > 0 ? (
-            <Timeline
-              items={flowList.map((f) => ({
-                color: FLOW_EVENT_COLOR[f.event_type] ?? 'gray',
-                children: (
-                  <div>
-                    <Text strong>{f.summary}</Text>
-                    {f.detail ? (
+        {detailRow ? (
+          <>
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="处理状态">
+                <Tag color={PROCESS_STATUS_TAG_COLOR[detailRow.process_status] ?? 'default'} style={{ margin: 0 }}>
+                  {PROCESS_STATUS_LABEL[detailRow.process_status] ?? detailRow.process_status}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="标题">{detailRow.title}</Descriptions.Item>
+              <Descriptions.Item label="备注">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{detailRow.note?.trim() ? detailRow.note : '—'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="截止时间">
+                {detailRow.due_at ? <DueCountdownCell dueAt={detailRow.due_at} now={now} /> : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="办理人">{renderAssigneeBlock(detailRow, true, true)}</Descriptions.Item>
+              <Descriptions.Item label="派单信息">{formatAssignedInfo(detailRow)}</Descriptions.Item>
+              <Descriptions.Item label="创建">{formatUserAtTime(detailRow.created_by_real_name, detailRow.created_at)}</Descriptions.Item>
+              <Descriptions.Item label="更新">{formatUserAtTime(detailRow.updated_by_real_name, detailRow.updated_at)}</Descriptions.Item>
+            </Descriptions>
+
+            <Divider style={{ margin: '20px 0 12px' }}>办理操作</Divider>
+            <Space wrap size={[8, 8]}>
+              {!detailRow.done && detailRow.process_status === 'pending' && detailRow.assignee_username ? (
+                <Button type="default" icon={<PlayCircleOutlined />} onClick={() => void startProcessing(detailRow)}>
+                  开始处理
+                </Button>
+              ) : null}
+              {!detailDispatchMode ? (
+                <Button type="default" icon={<SendOutlined />} onClick={openDetailDispatch}>
+                  {detailRow.assignee_username ? '转派' : '派单'}
+                </Button>
+              ) : null}
+              {detailRow.done ? (
+                <Button icon={<RollbackOutlined />} onClick={() => void toggleDone(detailRow, false)}>
+                  重新打开
+                </Button>
+              ) : (
+                <Popconfirm
+                  title="确定标记为已完成？"
+                  okText="确定完成"
+                  cancelText="取消"
+                  onConfirm={() => void toggleDone(detailRow, true)}
+                >
+                  <Button type="primary" icon={<CheckCircleOutlined />}>
+                    标记完成
+                  </Button>
+                </Popconfirm>
+              )}
+              <Button icon={<EditOutlined />} onClick={() => openEdit(detailRow)}>
+                编辑
+              </Button>
+              <Popconfirm
+                title="确定删除该待办？"
+                okText="删除"
+                cancelText="取消"
+                onConfirm={() => void remove(detailRow.id, true)}
+              >
+                <Button danger icon={<DeleteOutlined />}>
+                  删除
+                </Button>
+              </Popconfirm>
+            </Space>
+
+            {detailDispatchMode ? (
+              <div style={{ marginTop: 16, padding: 16, borderRadius: token.borderRadiusLG, background: token.colorFillAlter }}>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 12, fontSize: 13 }}>
+                  {detailRow.assignee_username
+                    ? '选择新的办理人；原办理人将解除，流程中会记录转派轨迹。'
+                    : '选择在职系统用户作为办理人，事项进入「未处理」状态。'}
+                </Typography.Paragraph>
+                <Form form={dispatchForm} layout="vertical" preserve={false}>
+                  <Form.Item
+                    name="assignee_username"
+                    label="办理人"
+                    rules={[{ required: true, message: '请选择办理人' }]}
+                    style={{ marginBottom: 12 }}
+                  >
+                    <Select showSearch optionFilterProp="label" placeholder="请选择" options={assigneeSelectOptions} />
+                  </Form.Item>
+                  <Space>
+                    <Button type="primary" loading={dispatchSubmitting} onClick={() => void submitDispatch()}>
+                      {detailRow.assignee_username ? '确认转派' : '确认派单'}
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setDetailDispatchMode(false)
+                        dispatchForm.resetFields()
+                      }}
+                    >
+                      取消
+                    </Button>
+                  </Space>
+                </Form>
+              </div>
+            ) : null}
+
+            <Divider style={{ margin: '20px 0 12px' }}>
+              <HistoryOutlined style={{ marginRight: 6 }} />
+              处理流程
+            </Divider>
+            <Spin spinning={detailFlowLoading} tip="加载中…">
+              {!detailFlowLoading && detailFlowList.length === 0 ? (
+                <Text type="secondary">暂无流程记录</Text>
+              ) : null}
+              {!detailFlowLoading && detailFlowList.length > 0 ? (
+                <Timeline
+                  items={detailFlowList.map((f) => ({
+                    color: FLOW_EVENT_COLOR[f.event_type] ?? 'gray',
+                    children: (
                       <div>
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          {f.detail}
-                        </Text>
+                        <Text strong>{f.summary}</Text>
+                        {f.detail ? (
+                          <div>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              {f.detail}
+                            </Text>
+                          </div>
+                        ) : null}
+                        <div style={{ marginTop: 4 }}>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            {formatUserAtTime(f.actor_real_name, f.created_at)}
+                          </Text>
+                        </div>
+                        {(f.from_status || f.to_status) && (
+                          <div style={{ marginTop: 2 }}>
+                            <Text type="secondary" style={{ fontSize: 11 }}>
+                              {f.from_status ? `${statusLabel(f.from_status)}` : '—'}
+                              {' → '}
+                              {f.to_status ? statusLabel(f.to_status) : '—'}
+                            </Text>
+                          </div>
+                        )}
                       </div>
-                    ) : null}
-                    <div style={{ marginTop: 4 }}>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {f.created_at}
-                        {f.actor_username ? ` · ${f.actor_username}` : ''}
-                      </Text>
-                    </div>
-                    {(f.from_status || f.to_status) && (
-                      <div style={{ marginTop: 2 }}>
-                        <Text type="secondary" style={{ fontSize: 11 }}>
-                          {f.from_status ? `${statusLabel(f.from_status)}` : '—'}
-                          {' → '}
-                          {f.to_status ? statusLabel(f.to_status) : '—'}
-                        </Text>
-                      </div>
-                    )}
-                  </div>
-                ),
-              }))}
-            />
-          ) : null}
-        </Spin>
+                    ),
+                  }))}
+                />
+              ) : null}
+            </Spin>
+          </>
+        ) : null}
       </Drawer>
     </div>
   )
