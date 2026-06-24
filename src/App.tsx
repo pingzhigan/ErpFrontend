@@ -99,6 +99,8 @@ import {
   LogsPage,
   MaintenanceMinorWorkPage,
   MaintenanceSchedulePage,
+  MaintenanceMinorWorkEfficiencyPage,
+  MaintenanceScheduleEfficiencyPage,
   PersonnelPresencePage,
   OpportunitiesPage,
   OpportunityDetailPage,
@@ -110,6 +112,8 @@ import {
   RdResearchDocsPage,
   RdResearchDocPreviewPage,
   RdResearchTodosPage,
+  RdTaskTimeoutManagementPage,
+  RdEfficiencyEvaluationPage,
   StaffHandoverPage,
   UserManagementPage,
   WorkbenchPushMessagesPage,
@@ -190,7 +194,9 @@ const appRoutes: AppRouteItem[] = [
     icon: <ToolOutlined />,
     routes: [
       { path: '/maintenance/minor-work', name: '零星工程', key: '/maintenance/minor-work', permission: 'maintenance' },
+      { path: '/maintenance/minor-work/efficiency', name: '零星工程效率评估（测试）', key: '/maintenance/minor-work/efficiency', permission: 'maintenance' },
       { path: '/maintenance/schedule', name: '维护排单', key: '/maintenance/schedule', permission: 'maintenance' },
+      { path: '/maintenance/schedule/efficiency', name: '维护排单效率评估（测试）', key: '/maintenance/schedule/efficiency', permission: 'maintenance' },
     ] as AppRouteItem[],
   },
   {
@@ -251,6 +257,8 @@ const appRoutes: AppRouteItem[] = [
     icon: <ExperimentOutlined />,
     routes: [
       { path: '/rd/todos', name: '研发待办', key: '/rd/todos', permission: 'rd-mgmt' },
+      { path: '/rd/task-timeout', name: '任务超时管理', key: '/rd/task-timeout', permission: 'rd-mgmt' },
+      { path: '/rd/efficiency', name: '效率评估', key: '/rd/efficiency', permission: 'rd-mgmt' },
       { path: '/rd/docs', name: '研发文档', key: '/rd/docs', permission: 'rd-mgmt' },
     ] as AppRouteItem[],
   },
@@ -1693,10 +1701,26 @@ const LayoutWithMenu: React.FC = () => {
             }
           />
           <Route
+            path="/maintenance/minor-work/efficiency"
+            element={
+              <RequireAuth permissions={['maintenance']}>
+                <MaintenanceMinorWorkEfficiencyPage />
+              </RequireAuth>
+            }
+          />
+          <Route
             path="/maintenance/minor-work"
             element={
               <RequireAuth permissions={['maintenance']}>
                 <MaintenanceMinorWorkPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/maintenance/schedule/efficiency"
+            element={
+              <RequireAuth permissions={['maintenance']}>
+                <MaintenanceScheduleEfficiencyPage />
               </RequireAuth>
             }
           />
@@ -1847,6 +1871,22 @@ const LayoutWithMenu: React.FC = () => {
             element={
               <RequireAuth permissions={['rd-mgmt']}>
                 <RdResearchTodosPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/rd/task-timeout"
+            element={
+              <RequireAuth permissions={['rd-mgmt']}>
+                <RdTaskTimeoutManagementPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/rd/efficiency"
+            element={
+              <RequireAuth permissions={['rd-mgmt']}>
+                <RdEfficiencyEvaluationPage />
               </RequireAuth>
             }
           />

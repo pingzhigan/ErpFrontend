@@ -57,7 +57,9 @@ const SIDEBAR_ENTRIES: TopEntry[] = [
     name: '维护管理',
     children: [
       { path: '/maintenance/minor-work', name: '零星工程', permission: 'maintenance' },
+      { path: '/maintenance/minor-work/efficiency', name: '零星工程效率评估（测试）', permission: 'maintenance' },
       { path: '/maintenance/schedule', name: '维护排单', permission: 'maintenance' },
+      { path: '/maintenance/schedule/efficiency', name: '维护排单效率评估（测试）', permission: 'maintenance' },
     ],
   },
   {
@@ -104,6 +106,8 @@ const SIDEBAR_ENTRIES: TopEntry[] = [
     name: '研发管理',
     children: [
       { path: '/rd/todos', name: '研发待办', permission: 'rd-mgmt' },
+      { path: '/rd/task-timeout', name: '任务超时管理', permission: 'rd-mgmt' },
+      { path: '/rd/efficiency', name: '效率评估', permission: 'rd-mgmt' },
       { path: '/rd/docs', name: '研发文档', permission: 'rd-mgmt' },
     ],
   },

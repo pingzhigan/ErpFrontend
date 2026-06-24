@@ -22,12 +22,14 @@ import {
   Drawer,
   Form,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Popover,
   Progress,
   Radio,
   Select,
+  Segmented,
   Slider,
   Space,
   Spin,
@@ -52,6 +54,12 @@ import {
   type AssigneeUserRow,
 } from '../utils/constructionAssigneeOptions'
 import { parseDueAtHourPickerValue } from '../utils/dueAtHourPickerParse'
+import { formatMoney } from '../utils/formatMoney'
+import { CompletionTimingCell, getCompletionTimingDuration } from '../utils/overdueCompletionText'
+import { useAuth } from '../auth/AuthContext'
+
+const EXPORT_EXCEL_MAX_ROWS = 2000
+type MtListStatusFilter = 'all' | 'open' | 'done' | 'overdue_done'
 
 const { Title, Text, Paragraph } = Typography
 const { Search } = Input
@@ -109,6 +117,9 @@ type MaintenanceTask = {
   audit?: GateAudit
   /** 各施工日人员并集（后端维护） */
   construction_workers?: string[]
+  project_amount?: number | null
+  completed_at?: string | null
+  completed_overdue?: boolean
 }
 
 type MtWorkerPeriod = 'half_day' | 'full_day' | 'overtime'
@@ -323,6 +334,7 @@ const LOG_ACTION_LABEL: Record<string, string> = {
   start: '开始执行',
   progress: '更新进度',
   complete: '完成',
+  complete_overdue: '过期完成',
   auto_overdue: '逾期（自动）',
   assign: '分配任务',
   reassign: '转派',
@@ -446,13 +458,31 @@ function dueAtDisabledTime(date: Dayjs | null | undefined) {
   return { disabledHours: () => disabledHours }
 }
 
+function mtStatusCell(task: MaintenanceTask) {
+  const s = STATUS_MAP[task.status] ?? { color: 'default', label: task.status }
+  return <Tag color={s.color}>{s.label}</Tag>
+}
+
+function mtCompletionTimingCell(task: MaintenanceTask) {
+  if (task.status !== 'completed') return <Text type="secondary">—</Text>
+  return (
+    <CompletionTimingCell
+      dueAt={task.due_at}
+      completedAt={task.completed_at}
+      completedOverdue={Boolean(task.completed_overdue)}
+    />
+  )
+}
+
 type MtListColKey =
   | 'code'
   | 'title'
   | 'task_type'
   | 'due_at'
+  | 'project_amount'
   | 'progress'
   | 'status'
+  | 'completion_timing'
   | 'assignee'
   | 'construction_workers'
   | 'audit'
@@ -462,23 +492,27 @@ const MT_LIST_COL_ORDER: MtListColKey[] = [
   'title',
   'task_type',
   'due_at',
+  'project_amount',
   'progress',
   'status',
+  'completion_timing',
   'assignee',
   'construction_workers',
   'audit',
 ]
 
 /** 列表列显示（不含「操作」，操作列始终展示）；持久化 localStorage */
-const MT_LIST_COLS_LS = 'maintenance_task.list.columns.v1'
+const MT_LIST_COLS_LS = 'maintenance_task.list.columns.v4'
 
 const MT_LIST_COL_LABEL: Record<MtListColKey, string> = {
   code: '排单号',
   title: '任务标题',
   task_type: '类型',
   due_at: '截止时间',
+  project_amount: '工程金额',
   progress: '进度',
   status: '状态',
+  completion_timing: '完成情况',
   assignee: '执行人',
   construction_workers: '施工人员',
   audit: '审批',
@@ -489,8 +523,10 @@ const MT_LIST_COL_WIDTH: Record<MtListColKey, number> = {
   title: 220,
   task_type: 100,
   due_at: 208,
+  project_amount: 110,
   progress: 140,
   status: 96,
+  completion_timing: 168,
   assignee: 120,
   construction_workers: 140,
   audit: 100,
@@ -538,11 +574,18 @@ function compareMtListRows(a: MaintenanceTask, b: MaintenanceTask, k: MtListColK
     }
     case 'due_at':
       return String(a.due_at ?? '').localeCompare(String(b.due_at ?? ''), 'zh-CN')
+    case 'project_amount':
+      return (Number(a.project_amount) || 0) - (Number(b.project_amount) || 0)
     case 'progress':
       return (Number(a.progress) || 0) - (Number(b.progress) || 0)
     case 'status': {
       const la = STATUS_MAP[a.status]?.label ?? a.status
       const lb = STATUS_MAP[b.status]?.label ?? b.status
+      return la.localeCompare(lb, 'zh-CN')
+    }
+    case 'completion_timing': {
+      const la = getCompletionTimingDuration(a.due_at, a.completed_at, Boolean(a.completed_overdue)) ?? ''
+      const lb = getCompletionTimingDuration(b.due_at, b.completed_at, Boolean(b.completed_overdue)) ?? ''
       return la.localeCompare(lb, 'zh-CN')
     }
     case 'assignee': {
@@ -647,7 +690,21 @@ const MaintenanceScheduleListTable = memo(function MaintenanceScheduleListTable(
           dataIndex: 'due_at',
           width: MT_LIST_COL_WIDTH.due_at,
           render: (v: string, r: MaintenanceTask) =>
-            r.status === 'completed' ? formatDueAtText(v) : <DueCountdownCell dueAt={v} now={listNow} />,
+            r.status === 'completed' || r.status === 'cancelled' ? (
+              formatDueAtText(v)
+            ) : (
+              <DueCountdownCell dueAt={v} now={listNow} />
+            ),
+        },
+      },
+      {
+        key: 'project_amount',
+        col: {
+          title: '工程金额',
+          dataIndex: 'project_amount',
+          width: MT_LIST_COL_WIDTH.project_amount,
+          align: 'right',
+          render: (_: unknown, r: MaintenanceTask) => formatMoney(r.project_amount),
         },
       },
       {
@@ -665,10 +722,15 @@ const MaintenanceScheduleListTable = memo(function MaintenanceScheduleListTable(
           title: '状态',
           dataIndex: 'status',
           width: MT_LIST_COL_WIDTH.status,
-          render: (v: string) => {
-            const s = STATUS_MAP[v] ?? { color: 'default', label: v }
-            return <Tag color={s.color}>{s.label}</Tag>
-          },
+          render: (_: string, r: MaintenanceTask) => mtStatusCell(r),
+        },
+      },
+      {
+        key: 'completion_timing',
+        col: {
+          title: '完成情况',
+          width: MT_LIST_COL_WIDTH.completion_timing,
+          render: (_: unknown, r: MaintenanceTask) => mtCompletionTimingCell(r),
         },
       },
       {
@@ -806,9 +868,13 @@ const mtDrawerSectionHeading: React.CSSProperties = {
 
 const MaintenanceSchedulePage: React.FC = () => {
   const { message: msg } = App.useApp()
+  const { user } = useAuth()
   const [list, setList] = useState<MaintenanceTask[]>([])
+  const [listTotal, setListTotal] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [exportingExcel, setExportingExcel] = useState(false)
   const [keyword, setKeyword] = useState('')
+  const [listStatusFilter, setListStatusFilter] = useState<MtListStatusFilter>('all')
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm] = Form.useForm()
@@ -965,16 +1031,21 @@ const MaintenanceSchedulePage: React.FC = () => {
   const fetchList = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await axios.get<{ list: MaintenanceTask[] }>('/api/maintenance-tasks', {
-        params: keyword ? { keyword } : {},
+      const params: Record<string, string> = {}
+      if (keyword) params.keyword = keyword
+      if (listStatusFilter !== 'all') params.list_status = listStatusFilter
+      const res = await axios.get<{ list: MaintenanceTask[]; total: number }>('/api/maintenance-tasks', {
+        params,
       })
       setList(res.data.list ?? [])
+      setListTotal(Number(res.data.total) || (res.data.list ?? []).length)
+      setListSort(null)
     } catch (e: unknown) {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '加载失败')
     } finally {
       setLoading(false)
     }
-  }, [keyword, msg])
+  }, [keyword, listStatusFilter, msg])
 
   useEffect(() => {
     void fetchList()
@@ -997,6 +1068,7 @@ const MaintenanceSchedulePage: React.FC = () => {
         task_type: normalizeTaskTypeForForm(tt),
         due_at: d,
         content: rec.content ?? '',
+        project_amount: rec.project_amount ?? undefined,
       })
       editDueAtLastDayKeyRef.current = d ? d.format('YYYY-MM-DD') : null
     },
@@ -1369,6 +1441,7 @@ const MaintenanceSchedulePage: React.FC = () => {
         task_type: v.task_type,
         due_at: due ? due.format('YYYY-MM-DD HH:00') : undefined,
         content: v.content?.trim() || undefined,
+        project_amount: v.project_amount,
       })
       const gate = createRes.data?.audit?.dingtalk_gate
       const st = createRes.data?.audit?.audit_status
@@ -1403,6 +1476,7 @@ const MaintenanceSchedulePage: React.FC = () => {
         task_type: v.task_type,
         due_at: due.format('YYYY-MM-DD HH:00'),
         content: (v.content ?? '').trim() || undefined,
+        project_amount: v.project_amount,
       })
       msg.success('已保存')
       const savedId = editRecord.id
@@ -1700,6 +1774,45 @@ const MaintenanceSchedulePage: React.FC = () => {
     return assigneeLabelMap(assignSelectOptions).get(a) ?? a
   }, [task?.assignee, assignSelectOptions])
 
+  const handleExportExcel = useCallback(async () => {
+    const exportTotal = listTotal || list.length
+    if (!exportTotal) {
+      msg.warning('暂无可导出的维护排单')
+      return
+    }
+    if (exportTotal > EXPORT_EXCEL_MAX_ROWS) {
+      msg.warning(`当前 ${exportTotal} 条，超过导出上限 ${EXPORT_EXCEL_MAX_ROWS} 条，请先筛选后再导出`)
+      return
+    }
+    setExportingExcel(true)
+    try {
+      const params = new URLSearchParams()
+      if (keyword.trim()) params.set('keyword', keyword.trim())
+      if (listStatusFilter !== 'all') params.set('list_status', listStatusFilter)
+      const token = user?.token
+      const res = await fetch(`/api/maintenance-tasks/export-excel?${params.toString()}`, {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error((err as { message?: string }).message || '导出失败')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `维护排单_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      msg.success(`已导出 ${exportTotal} 条（当前筛选下全部数据）`)
+    } catch (e: unknown) {
+      msg.error((e as Error)?.message || '导出失败')
+    } finally {
+      setExportingExcel(false)
+    }
+  }, [keyword, list.length, listStatusFilter, listTotal, msg, user?.token])
+
   return (
     <Card>
       <Space style={{ marginBottom: 16 }} wrap size="middle">
@@ -1711,13 +1824,26 @@ const MaintenanceSchedulePage: React.FC = () => {
           新建后须先在详情「分配任务」指定执行人，方可提交钉钉审批、填写操作记录与完结；执行人可随时「转派」。列表与详情会检测逾期；保存操作记录后已排单→执行中；完结仅能通过抽屉右上角「完结」。
         </Text>
         <Search
-          placeholder="搜索排单号/标题/内容/执行人/截止时间"
+          placeholder="搜索排单号/标题/内容/执行人/截止时间/金额"
           allowClear
           onSearch={setKeyword}
           style={{ width: 300 }}
         />
+        <Segmented<MtListStatusFilter>
+          value={listStatusFilter}
+          onChange={(v) => setListStatusFilter(v)}
+          options={[
+            { label: '全部', value: 'all' },
+            { label: '未完成', value: 'open' },
+            { label: '已完成', value: 'done' },
+            { label: '过期完成', value: 'overdue_done' },
+          ]}
+        />
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建任务
+        </Button>
+        <Button icon={<DownloadOutlined />} loading={exportingExcel} onClick={() => void handleExportExcel()}>
+          导出 Excel
         </Button>
         <Popover
           title="列表列显示"
@@ -1832,6 +1958,9 @@ const MaintenanceSchedulePage: React.FC = () => {
               }}
             />
           </Form.Item>
+          <Form.Item name="project_amount" label="工程金额" extra="选填，留空按 0 处理">
+            <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="0.00" />
+          </Form.Item>
           <Form.Item name="content" label="任务说明">
             <TextArea rows={3} placeholder="选填：范围、要求等" />
           </Form.Item>
@@ -1887,6 +2016,9 @@ const MaintenanceSchedulePage: React.FC = () => {
                 createForm.setFieldValue('due_at', next)
               }}
             />
+          </Form.Item>
+          <Form.Item name="project_amount" label="工程金额" extra="选填，留空按 0 处理">
+            <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="0.00" />
           </Form.Item>
           <Form.Item name="content" label="任务说明">
             <TextArea rows={3} placeholder="选填：范围、要求等" />
@@ -2117,9 +2249,10 @@ const MaintenanceSchedulePage: React.FC = () => {
                   labelStyle={{ minWidth: 120, width: 120, whiteSpace: 'nowrap', verticalAlign: 'top' }}
                   contentStyle={{ minWidth: 0, wordBreak: 'break-word', verticalAlign: 'top' }}
                 >
-                  <Descriptions.Item label="状态">
-                    <Tag color={STATUS_MAP[task.status]?.color}>{STATUS_MAP[task.status]?.label}</Tag>
-                  </Descriptions.Item>
+                  <Descriptions.Item label="状态">{mtStatusCell(task)}</Descriptions.Item>
+                  {task.status === 'completed' ? (
+                    <Descriptions.Item label="完成情况">{mtCompletionTimingCell(task)}</Descriptions.Item>
+                  ) : null}
                   {task.audit?.dingtalk_gate ? (
                     <Descriptions.Item label="钉钉审批">
                       {(() => {
@@ -2130,6 +2263,7 @@ const MaintenanceSchedulePage: React.FC = () => {
                   ) : null}
                   <Descriptions.Item label="类型">{TYPE_MAP[task.task_type] ?? task.task_type}</Descriptions.Item>
                   <Descriptions.Item label="截止时间">{task.due_at}</Descriptions.Item>
+                  <Descriptions.Item label="工程金额">{formatMoney(task.project_amount)}</Descriptions.Item>
                   <Descriptions.Item label="进度">
                     <Progress percent={task.progress} size="small" />
                   </Descriptions.Item>

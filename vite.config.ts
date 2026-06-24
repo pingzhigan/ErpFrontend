@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
 /**
@@ -20,7 +20,11 @@ function devRelaxedCspForDingTalkWebView(): Plugin {
 }
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const apiTarget = env.VITE_DEV_API_TARGET || 'http://localhost:4000'
+
+  return {
   plugins: [react(), devRelaxedCspForDingTalkWebView()],
   server: {
     port: 5123,
@@ -28,7 +32,7 @@ export default defineConfig({
     proxy: {
       // SSE（/api/workbench/push-stream）为长连接；默认代理超时或客户端 abort 时易出现 ECONNRESET 日志
       '/api': {
-        target: 'http://localhost:4000',
+        target: apiTarget,
         changeOrigin: true,
         timeout: 0,
         proxyTimeout: 0,
@@ -52,4 +56,5 @@ export default defineConfig({
   build: {
     target: 'es2020',
   },
+  }
 })

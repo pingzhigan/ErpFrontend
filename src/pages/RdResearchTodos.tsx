@@ -46,12 +46,14 @@ import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import {
   buildConstructionAssigneeOptions,
   type AssigneeInactiveRef,
   type AssigneeUserRow,
   labelForAssigneeUsername,
 } from '../utils/constructionAssigneeOptions'
+import { CompletionTimingCell } from '../utils/overdueCompletionText'
 import { compressImageFilesForUpload, compressImageForUpload } from '../utils/compressImageForUpload'
 
 const { Title, Text, Paragraph } = Typography
@@ -66,6 +68,7 @@ export type RdResearchTodoRow = {
   status: string
   completed_at: string | null
   completed_by: string | null
+  completed_overdue?: boolean
   created_at: string
   updated_at: string
   created_by: string | null
@@ -106,7 +109,7 @@ export type RdTodoTrackAttachmentDto = {
   created_by: string | null
 }
 
-type StatusFilter = 'all' | 'open' | 'done'
+type StatusFilter = 'all' | 'open' | 'done' | 'overdue_done'
 
 function parseAssigneeList(raw: unknown): string[] {
   try {
@@ -163,6 +166,7 @@ function formatDateTime(s: string | null | undefined): string {
 
 const RdResearchTodosPage: React.FC = () => {
   const { message: msg } = App.useApp()
+  const navigate = useNavigate()
   const [list, setList] = useState<RdResearchTodoRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -285,7 +289,10 @@ const RdResearchTodosPage: React.FC = () => {
     try {
       const params: Record<string, string | number> = { limit: pageSize, offset: (page - 1) * pageSize }
       if (keyword.trim()) params.keyword = keyword.trim()
-      if (statusFilter !== 'all') params.status = statusFilter
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'overdue_done') params.list_status = 'overdue_done'
+        else params.status = statusFilter
+      }
       const res = await axios.get<{ list: RdResearchTodoRow[]; total: number }>('/api/rd/todos', { params })
       setList(res.data?.list ?? [])
       setTotal(res.data?.total ?? 0)
@@ -823,6 +830,13 @@ const RdResearchTodosPage: React.FC = () => {
 
   const statusTag = (row: RdResearchTodoRow) => {
     const done = row.status === 'done'
+    if (done && row.completed_overdue) {
+      return (
+        <Tag color="orange" className="rd-todo-status-tag">
+          过期完成
+        </Tag>
+      )
+    }
     if (done) {
       return (
         <Tag icon={<CheckCircleOutlined />} color="success" className="rd-todo-status-tag">
@@ -1028,6 +1042,7 @@ const RdResearchTodosPage: React.FC = () => {
             </span>
           ),
         },
+        { value: 'overdue_done' as const, label: '过期完成' },
         { value: 'all' as const, label: '全部' },
       ] as const,
     [],
@@ -1065,7 +1080,9 @@ const RdResearchTodosPage: React.FC = () => {
           </span>
         }
         extra={
-          <Space>
+          <Space wrap>
+            <Button onClick={() => navigate('/rd/task-timeout')}>任务超时管理</Button>
+            <Button onClick={() => navigate('/rd/efficiency')}>效率评估</Button>
             <Button icon={<ReloadOutlined />} onClick={() => void fetchList()} loading={loading}>
               刷新
             </Button>
@@ -1286,6 +1303,15 @@ const RdResearchTodosPage: React.FC = () => {
           <>
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="状态">{statusTag(viewRow)}</Descriptions.Item>
+              {viewRow.status === 'done' ? (
+                <Descriptions.Item label="完成情况">
+                  <CompletionTimingCell
+                    dueAt={viewRow.due_at}
+                    completedAt={viewRow.completed_at}
+                    completedOverdue={Boolean(viewRow.completed_overdue)}
+                  />
+                </Descriptions.Item>
+              ) : null}
               <Descriptions.Item label="主题名称">{viewRow.title}</Descriptions.Item>
               <Descriptions.Item label="具体内容">
                 <div style={{ whiteSpace: 'pre-wrap' }}>{viewRow.content?.trim() ? viewRow.content : '—'}</div>

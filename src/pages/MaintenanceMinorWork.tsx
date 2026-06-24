@@ -33,6 +33,7 @@ import {
   Progress,
   Radio,
   Select,
+  Segmented,
   Slider,
   Space,
   Spin,
@@ -57,6 +58,12 @@ import {
   type AssigneeUserRow,
 } from '../utils/constructionAssigneeOptions'
 import { parseDueAtHourPickerValue } from '../utils/dueAtHourPickerParse'
+import { formatMoney } from '../utils/formatMoney'
+import { CompletionTimingCell, getCompletionTimingDuration } from '../utils/overdueCompletionText'
+import { useAuth } from '../auth/AuthContext'
+
+const EXPORT_EXCEL_MAX_ROWS = 2000
+type MwListStatusFilter = 'all' | 'open' | 'done' | 'overdue_done'
 
 const { Title, Text, Paragraph, Link } = Typography
 const { Search } = Input
@@ -165,6 +172,8 @@ type MinorWorkOrder = {
   updated_at: string
   created_by: string | null
   audit?: GateAudit
+  closed_at?: string | null
+  completed_overdue?: boolean
 }
 
 type MinorWorkWorkerPeriod = 'half_day' | 'full_day' | 'overtime'
@@ -289,8 +298,24 @@ const STATUS_MAP: Record<MinorWorkStatus, { color: string; label: string }> = {
   closed: { color: 'success', label: '已闭环' },
 }
 
+function mwStatusCell(order: MinorWorkOrder) {
+  const s = STATUS_MAP[order.status] ?? { color: 'default', label: order.status }
+  return <Tag color={s.color}>{s.label}</Tag>
+}
+
+function mwCompletionTimingCell(order: MinorWorkOrder) {
+  if (order.status !== 'closed') return <Text type="secondary">—</Text>
+  return (
+    <CompletionTimingCell
+      dueAt={order.due_at}
+      completedAt={order.closed_at}
+      completedOverdue={Boolean(order.completed_overdue)}
+    />
+  )
+}
+
 /** 列表列显示（不含「操作」，操作列始终展示）；持久化 localStorage */
-const MINOR_WORK_LIST_COLS_LS = 'minor_work.list.columns.v1'
+const MINOR_WORK_LIST_COLS_LS = 'minor_work.list.columns.v3'
 
 type MinorWorkListColKey =
   | 'code'
@@ -301,6 +326,7 @@ type MinorWorkListColKey =
   | 'cost_budget'
   | 'progress'
   | 'status'
+  | 'completion_timing'
   | 'handler'
   | 'construction_workers'
   | 'audit'
@@ -314,6 +340,7 @@ const MINOR_WORK_LIST_COL_ORDER: MinorWorkListColKey[] = [
   'cost_budget',
   'progress',
   'status',
+  'completion_timing',
   'handler',
   'construction_workers',
   'audit',
@@ -328,6 +355,7 @@ const MINOR_WORK_LIST_COL_LABEL: Record<MinorWorkListColKey, string> = {
   cost_budget: '成本预算',
   progress: '进度',
   status: '状态',
+  completion_timing: '完成情况',
   handler: '部门负责人',
   construction_workers: '施工人员',
   audit: '审批',
@@ -341,7 +369,8 @@ const MINOR_WORK_LIST_COL_WIDTH: Record<MinorWorkListColKey, number> = {
   project_amount: 120,
   cost_budget: 120,
   progress: 140,
-  status: 88,
+  status: 96,
+  completion_timing: 168,
   handler: 112,
   construction_workers: 160,
   audit: 100,
@@ -367,12 +396,6 @@ function loadMinorWorkListColVisibility(): Record<MinorWorkListColKey, boolean> 
   } catch {
     return allOn
   }
-}
-
-function formatMoney(n: number | null | undefined) {
-  return n != null && Number.isFinite(n)
-    ? n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    : '—'
 }
 
 function sanitizeNullableText(v: string | null | undefined): string | null {
@@ -432,6 +455,11 @@ function compareMinorWorkListRows(a: MinorWorkOrder, b: MinorWorkOrder, field: M
       return (Number(a.progress) || 0) - (Number(b.progress) || 0)
     case 'status':
       return MINOR_WORK_STATUS_SORT_ORDER.indexOf(a.status) - MINOR_WORK_STATUS_SORT_ORDER.indexOf(b.status)
+    case 'completion_timing': {
+      const la = getCompletionTimingDuration(a.due_at, a.closed_at, Boolean(a.completed_overdue)) ?? ''
+      const lb = getCompletionTimingDuration(b.due_at, b.closed_at, Boolean(b.completed_overdue)) ?? ''
+      return la.localeCompare(lb, 'zh-CN')
+    }
     case 'handler':
       return String(a.handler ?? '').localeCompare(String(b.handler ?? ''), 'zh-CN')
     case 'construction_workers': {
@@ -568,9 +596,13 @@ const minorWorkDrawerSectionHeading: React.CSSProperties = {
 
 const MaintenanceMinorWorkPage: React.FC = () => {
   const { message: msg } = App.useApp()
+  const { user } = useAuth()
   const [list, setList] = useState<MinorWorkOrder[]>([])
+  const [listTotal, setListTotal] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [exportingExcel, setExportingExcel] = useState(false)
   const [keyword, setKeyword] = useState('')
+  const [listStatusFilter, setListStatusFilter] = useState<MwListStatusFilter>('all')
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm] = Form.useForm()
   /** 与 Form 解耦：onChange 时表单可能已是新日期，用 ref 判断是否真的「换日」。 */
@@ -731,17 +763,21 @@ const MaintenanceMinorWorkPage: React.FC = () => {
   const fetchList = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await axios.get<{ list: MinorWorkOrder[] }>('/api/minor-works', {
-        params: keyword ? { keyword } : {},
+      const params: Record<string, string> = {}
+      if (keyword) params.keyword = keyword
+      if (listStatusFilter !== 'all') params.list_status = listStatusFilter
+      const res = await axios.get<{ list: MinorWorkOrder[]; total: number }>('/api/minor-works', {
+        params,
       })
       setList(res.data.list ?? [])
+      setListTotal(Number(res.data.total) || (res.data.list ?? []).length)
       setListSort(null)
     } catch (e: unknown) {
       msg.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || '加载失败')
     } finally {
       setLoading(false)
     }
-  }, [keyword, msg])
+  }, [keyword, listStatusFilter, msg])
 
   useEffect(() => {
     fetchList()
@@ -1563,10 +1599,15 @@ const MaintenanceMinorWorkPage: React.FC = () => {
           title: '状态',
           dataIndex: 'status',
           width: MINOR_WORK_LIST_COL_WIDTH.status,
-          render: (v: MinorWorkStatus) => {
-            const s = STATUS_MAP[v] ?? { color: 'default', label: v }
-            return <Tag color={s.color}>{s.label}</Tag>
-          },
+          render: (_: MinorWorkStatus, r: MinorWorkOrder) => mwStatusCell(r),
+        },
+      },
+      {
+        key: 'completion_timing',
+        col: {
+          title: '完成情况',
+          width: MINOR_WORK_LIST_COL_WIDTH.completion_timing,
+          render: (_: unknown, r: MinorWorkOrder) => mwCompletionTimingCell(r),
         },
       },
       {
@@ -1681,6 +1722,45 @@ const MaintenanceMinorWorkPage: React.FC = () => {
     />
   )
 
+  const handleExportExcel = useCallback(async () => {
+    const exportTotal = listTotal || list.length
+    if (!exportTotal) {
+      msg.warning('暂无可导出的零星工程')
+      return
+    }
+    if (exportTotal > EXPORT_EXCEL_MAX_ROWS) {
+      msg.warning(`当前 ${exportTotal} 条，超过导出上限 ${EXPORT_EXCEL_MAX_ROWS} 条，请先筛选后再导出`)
+      return
+    }
+    setExportingExcel(true)
+    try {
+      const params = new URLSearchParams()
+      if (keyword.trim()) params.set('keyword', keyword.trim())
+      if (listStatusFilter !== 'all') params.set('list_status', listStatusFilter)
+      const token = user?.token
+      const res = await fetch(`/api/minor-works/export-excel?${params.toString()}`, {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error((err as { message?: string }).message || '导出失败')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `零星工程_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      msg.success(`已导出 ${exportTotal} 条（当前筛选下全部数据）`)
+    } catch (e: unknown) {
+      msg.error((e as Error)?.message || '导出失败')
+    } finally {
+      setExportingExcel(false)
+    }
+  }, [keyword, list.length, listStatusFilter, listTotal, msg, user?.token])
+
   return (
     <Card>
       <Space style={{ marginBottom: 16 }} wrap>
@@ -1697,8 +1777,21 @@ const MaintenanceMinorWorkPage: React.FC = () => {
           onSearch={setKeyword}
           style={{ width: 300 }}
         />
+        <Segmented<MwListStatusFilter>
+          value={listStatusFilter}
+          onChange={(v) => setListStatusFilter(v)}
+          options={[
+            { label: '全部', value: 'all' },
+            { label: '未闭环', value: 'open' },
+            { label: '已闭环', value: 'done' },
+            { label: '过期完成', value: 'overdue_done' },
+          ]}
+        />
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建事项
+        </Button>
+        <Button icon={<DownloadOutlined />} loading={exportingExcel} onClick={() => void handleExportExcel()}>
+          导出 Excel
         </Button>
         <Popover
           title="列表列显示"
@@ -2006,11 +2099,10 @@ const MaintenanceMinorWorkPage: React.FC = () => {
               }}
               contentStyle={{ minWidth: 0, wordBreak: 'break-word', verticalAlign: 'top' }}
             >
-              <Descriptions.Item label="状态">
-                <Tag color={STATUS_MAP[order.status]?.color ?? 'default'}>
-                  {STATUS_MAP[order.status]?.label ?? drawerDisplayText(String(order.status ?? ''), '未知')}
-                </Tag>
-              </Descriptions.Item>
+              <Descriptions.Item label="状态">{mwStatusCell(order)}</Descriptions.Item>
+              {order.status === 'closed' ? (
+                <Descriptions.Item label="完成情况">{mwCompletionTimingCell(order)}</Descriptions.Item>
+              ) : null}
               {order.audit?.dingtalk_gate ? (
                 <Descriptions.Item label="钉钉审批">
                   {(() => {
